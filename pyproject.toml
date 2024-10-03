@@ -10,6 +10,9 @@ python = "^3.10"
 transformers = "^4.41.1"
 torch = "^2.3.0"
 datasets = "^2.19.1"
+matplotlib = "^3.9.2"
+einops = "^0.8.0"
+imageio = "^2.35.1"
 
 
 [build-system]
