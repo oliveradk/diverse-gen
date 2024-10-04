@@ -60,6 +60,13 @@ from toy_data.grid import generate_data, plot_data, sample_minibatch, savefig
 # In[ ]:
 
 
+# TODO: get and log accuracy of model on both label types, in gif only show first, 
+# later, compute curves showing mean accuracy of each loss type acros the mix rates
+
+
+# In[ ]:
+
+
 from dataclasses import dataclass 
 @dataclass
 class Config():
@@ -69,7 +76,7 @@ class Config():
     target_size: int = 5000
     batch_size: int = 32 
     target_batch_size: int = 100 
-    train_iter: int = 1500
+    train_iter: int = 200#1500
     heads: int = 2 
     aux_weight: float = 1.0
     mix_rate: Optional[float] = 0.5
@@ -148,7 +155,8 @@ fig_save_times = sorted(
 training_data = generate_data(conf.train_size, train=True)
 quad_proportions = [conf.l_01_mix_rate, (1-conf.mix_rate)/2, conf.l_10_mix_rate, (1-conf.mix_rate)/2]
 target_data = generate_data(conf.target_size, quadrant_proportions=quad_proportions)
-test_data = generate_data(conf.target_size, mix_rate=0.5)
+test_data = generate_data(conf.target_size // 2, mix_rate=0.5)
+test_data_alt = generate_data(conf.target_size // 2, mix_rate=0.5, swap_y_meaning=True)
 
 net = torch.nn.Sequential(
     torch.nn.Linear(2, 40), nn.ReLU(), nn.Linear(40, 40), nn.ReLU(), nn.Linear(40, conf.heads)
@@ -232,11 +240,19 @@ for t in tqdm(range(conf.train_iter), desc="Training"):
     test_x, test_y = sample_minibatch(test_data, conf.target_batch_size)
     with torch.no_grad():
         test_logits = net(test_x)
+    test_x_alt, test_y_alt = sample_minibatch(test_data_alt, conf.target_batch_size)
+    with torch.no_grad():
+        test_logits_alt = net(test_x_alt)
 
     for i in range(conf.heads):
         corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
         acc_i = corrects_i.float().mean()
         metrics[f"acc_{i}"].append(acc_i.item())
+
+        corrects_i_alt = (test_logits_alt[:, i] > 0) == test_y_alt.flatten()
+        acc_i_alt = corrects_i_alt.float().mean()
+        metrics[f"acc_{i}_alt"].append(acc_i_alt.item())
+
     metrics[f"xent"].append(xent.item())
     metrics[f"repulsion_loss"].append(repulsion_loss.item())
 
@@ -271,6 +287,16 @@ for t in tqdm(range(conf.train_iter), desc="Training ERM"):
         corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
         acc_i = corrects_i.float().mean()
         metrics[f"ERM_acc_{i}"].append(acc_i.item())
+
+
+# In[ ]:
+
+
+# save metrics 
+import json 
+os.makedirs("metrics", exist_ok=True)
+with open(f"metrics/{exp_name}.json", "w") as f:
+    json.dump(metrics, f, indent=4)
 
 
 # In[ ]:
