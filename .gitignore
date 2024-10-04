@@ -161,5 +161,4 @@ cython_debug/
 
 # out dirs 
 gifs/
-toy_data/
 figures/
