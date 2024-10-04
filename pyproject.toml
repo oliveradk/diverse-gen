@@ -13,6 +13,8 @@ datasets = "^2.19.1"
 matplotlib = "^3.9.2"
 einops = "^0.8.0"
 imageio = "^2.35.1"
+scipy = "^1.14.1"
+omegaconf = "^2.3.0"
 
 
 [build-system]

@@ -1,15 +1,26 @@
 import torch as t 
 from typing import Literal, Optional
 
-class DisagreeLoss(t.nn.Module):
+from scipy.stats import binom
+
+class ACELoss(t.nn.Module):
 
 
-    def __init__(self, heads=2, gamma=1, mode: Literal['focal', 'ace', 'conf'] = 'ace'):
+    def __init__(
+        self, 
+        heads=2,
+        mode: Literal['focal', 'exp', 'prob', 'conf'] = 'exp',
+        gamma: Optional[int]=1, 
+        l_01_rate: Optional[float]=0.25, 
+        l_10_rate: Optional[float]=0.25, 
+    ):
         super().__init__()
         assert heads == 2
         self.heads = heads # assume 2 heads for now
         self.gamma = gamma
         self.mode = mode
+        self.l_01_rate = l_01_rate
+        self.l_10_rate = l_10_rate
 
     
     def forward(self, logits):
@@ -42,7 +53,7 @@ class DisagreeLoss(t.nn.Module):
         head_1_1 = t.nn.functional.binary_cross_entropy(
             probs[:, 1], t.ones_like(probs[:, 1]), reduction='none'
         )
-        if self.mode == 'ace':
+        if self.mode == 'exp':
             loss_0_1 = head_0_0 + head_1_1
             loss_1_0 = head_1_0 + head_0_1
             # sort losses in ascending order
@@ -52,6 +63,23 @@ class DisagreeLoss(t.nn.Module):
             exp_weight = t.exp(-t.arange(loss_0_1.shape[0]))
             loss_0_1 = loss_0_1 * exp_weight
             loss_1_0 = loss_1_0 * exp_weight
+            loss = loss_0_1 + loss_1_0
+        elif self.mode == 'prob':
+            # expected value of cross-term losses 
+            # (assuming ordering is correct)
+            loss_0_1 = head_0_0 + head_1_1
+            loss_1_0 = head_1_0 + head_0_1
+            # sort losses in ascending order
+            loss_0_1, _ = loss_0_1.sort()
+            loss_1_0, _ = loss_1_0.sort()
+            bs = logits.shape[0]
+            weights_01 = t.zeros(bs)
+            weights_10 = t.zeros(bs)
+            for i in range(1, bs+1):
+                weights_01[:i] += (binom.pmf(i, bs, self.l_01_rate) / i) * (bs / i)
+                weights_10[:i] += (binom.pmf(i, bs, self.l_10_rate) / i) * (bs / i)
+            loss_0_1 = loss_0_1 * weights_01
+            loss_1_0 = loss_1_0 * weights_10
             loss = loss_0_1 + loss_1_0
         elif self.mode == 'conf': # TODO: for weight, 
             # at first, encourages disagreement amoung uncertain samples 
