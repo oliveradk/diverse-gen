@@ -84,6 +84,7 @@ class Config():
     l_10_mix_rate: Optional[float] = None
     gamma: Optional[float] = 1.0
     lr: float = 1e-3
+    make_gifs: bool = False
 
 def post_init(conf: Config):
     if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
@@ -301,96 +302,98 @@ with open(f"metrics/{exp_name}.json", "w") as f:
 # In[ ]:
 
 
-# Draw learning curves
-def draw_full_curve(t=None, with_erm=False):
-    fig, axs = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(8, 6))
+if conf.make_gifs:
+    # Draw learning curves
+    def draw_full_curve(t=None, with_erm=False):
+        fig, axs = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(8, 6))
+        N = 10
+        uniform = np.ones(N) / N
+        axs[0].set_xlim(-10, 1000)
+        axs[0].set_ylim(0.45, 1.05)
+        smooth = lambda x: np.convolve(x, uniform, mode="valid")
+        for i in [0, 1]:
+            axs[0].plot(smooth(metrics[f"acc_{i}"]), alpha=0.8, linewidth=2)
+        if with_erm:
+            axs[0].plot(smooth(metrics["ERM_acc_0"]), c="dimgray", alpha=0.5, linewidth=2)
+        axs[1].plot(smooth(metrics["xent"]), c="dimgray")
+        axs[2].plot(smooth(metrics["repulsion_loss"]), c="dimgray")
+        axs[0].set_ylabel("Accuracy")
+        axs[1].set_ylabel("Cross-Entropy")
+        axs[2].set_ylabel("MI")
+        for ax in axs:
+            ax.spines["bottom"].set_linewidth(1.2)
+            ax.spines["left"].set_linewidth(1.2)
+            ax.xaxis.set_tick_params(width=1.2)
+            ax.yaxis.set_tick_params(width=1.2)
+            ax.spines["top"].set_color("none")
+            ax.spines["right"].set_color("none")
+        if t:
+            for ax in axs:
+                ax.axvline(x=t, c="k")
+
+
+    draw_full_curve()
+    savefig(f"temp/{exp_name}/learning_curve_full")
+
+    draw_full_curve(with_erm=True)
+    savefig(f"temp/{exp_name}/learning_curve_full_with_ERM")
+
+    for t in tqdm(fig_save_times, desc="Drawing learning curves"):
+        draw_full_curve(t=t)
+        savefig(f"temp/{exp_name}/learning_curve_full_{t}")
+        plt.close("all")
+
+    plt.figure(figsize=(8, 2))
     N = 10
     uniform = np.ones(N) / N
-    axs[0].set_xlim(-10, 1000)
-    axs[0].set_ylim(0.45, 1.05)
+    plt.ylim(0.45, 1.05)
     smooth = lambda x: np.convolve(x, uniform, mode="valid")
+    ax = plt.gca()
     for i in [0, 1]:
-        axs[0].plot(smooth(metrics[f"acc_{i}"]), alpha=0.8, linewidth=2)
-    if with_erm:
-        axs[0].plot(smooth(metrics["ERM_acc_0"]), c="dimgray", alpha=0.5, linewidth=2)
-    axs[1].plot(smooth(metrics["xent"]), c="dimgray")
-    axs[2].plot(smooth(metrics["repulsion_loss"]), c="dimgray")
-    axs[0].set_ylabel("Accuracy")
-    axs[1].set_ylabel("Cross-Entropy")
-    axs[2].set_ylabel("MI")
-    for ax in axs:
-        ax.spines["bottom"].set_linewidth(1.2)
-        ax.spines["left"].set_linewidth(1.2)
-        ax.xaxis.set_tick_params(width=1.2)
-        ax.yaxis.set_tick_params(width=1.2)
-        ax.spines["top"].set_color("none")
-        ax.spines["right"].set_color("none")
-    if t:
-        for ax in axs:
-            ax.axvline(x=t, c="k")
-
-
-draw_full_curve()
-savefig(f"temp/{exp_name}/learning_curve_full")
-
-draw_full_curve(with_erm=True)
-savefig(f"temp/{exp_name}/learning_curve_full_with_ERM")
-
-for t in tqdm(fig_save_times, desc="Drawing learning curves"):
-    draw_full_curve(t=t)
-    savefig(f"temp/{exp_name}/learning_curve_full_{t}")
-    plt.close("all")
-
-plt.figure(figsize=(8, 2))
-N = 10
-uniform = np.ones(N) / N
-plt.ylim(0.45, 1.05)
-smooth = lambda x: np.convolve(x, uniform, mode="valid")
-ax = plt.gca()
-for i in [0, 1]:
-    ax.plot(smooth(metrics[f"acc_{i}"]), alpha=0.8, linewidth=2)
-ax.plot(smooth(metrics["ERM_acc_0"]), c="dimgray", alpha=0.5, linewidth=2)
-ax.set_ylabel("Accuracy")
-ax.spines["bottom"].set_linewidth(1.2)
-ax.spines["left"].set_linewidth(1.2)
-ax.xaxis.set_tick_params(width=1.2)
-ax.yaxis.set_tick_params(width=1.2)
-ax.spines["top"].set_color("none")
-ax.spines["right"].set_color("none")
-savefig(f"temp/{exp_name}/learning_curve_with_ERM")
+        ax.plot(smooth(metrics[f"acc_{i}"]), alpha=0.8, linewidth=2)
+    ax.plot(smooth(metrics["ERM_acc_0"]), c="dimgray", alpha=0.5, linewidth=2)
+    ax.set_ylabel("Accuracy")
+    ax.spines["bottom"].set_linewidth(1.2)
+    ax.spines["left"].set_linewidth(1.2)
+    ax.xaxis.set_tick_params(width=1.2)
+    ax.yaxis.set_tick_params(width=1.2)
+    ax.spines["top"].set_color("none")
+    ax.spines["right"].set_color("none")
+    savefig(f"temp/{exp_name}/learning_curve_with_ERM")
 
 
 # In[ ]:
 
 
-# Stitch figures into gifs
-import imageio.v2 as imageio
-os.makedirs("gifs", exist_ok=True)
-print("making gifs")
+if conf.make_gifs:
+    # Stitch figures into gifs
+    import imageio.v2 as imageio
+    os.makedirs("gifs", exist_ok=True)
+    print("making gifs")
 
-filenames = [f"figures/temp/{exp_name}/{t}_h0.png" for t in fig_save_times]
-images = [imageio.imread(filename) for filename in filenames]
-gif_head_0_filename = f"gifs/{exp_name}_h0.gif"
-imageio.mimsave(gif_head_0_filename, images)
+    filenames = [f"figures/temp/{exp_name}/{t}_h0.png" for t in fig_save_times]
+    images = [imageio.imread(filename) for filename in filenames]
+    gif_head_0_filename = f"gifs/{exp_name}_h0.gif"
+    imageio.mimsave(gif_head_0_filename, images)
 
-filenames = [f"figures/temp/{exp_name}/{t}_h1.png" for t in fig_save_times]
-images = [imageio.imread(filename) for filename in filenames]
-gif_head_1_filename = f"gifs/{exp_name}_h1.gif"
-imageio.mimsave(gif_head_1_filename, images)
+    filenames = [f"figures/temp/{exp_name}/{t}_h1.png" for t in fig_save_times]
+    images = [imageio.imread(filename) for filename in filenames]
+    gif_head_1_filename = f"gifs/{exp_name}_h1.gif"
+    imageio.mimsave(gif_head_1_filename, images)
 
-filenames = [f"figures/temp/{exp_name}/{t}_disagreement.png" for t in fig_save_times]
-images = [imageio.imread(filename) for filename in filenames]
-gif_disagreement_filename = f"gifs/{exp_name}_disagreement.gif"
-imageio.mimsave(gif_disagreement_filename, images)
+    filenames = [f"figures/temp/{exp_name}/{t}_disagreement.png" for t in fig_save_times]
+    images = [imageio.imread(filename) for filename in filenames]
+    gif_disagreement_filename = f"gifs/{exp_name}_disagreement.gif"
+    imageio.mimsave(gif_disagreement_filename, images)
 
-filenames = [
-    f"figures/temp/{exp_name}/learning_curve_full_{t}.png" for t in fig_save_times
-]
-images = [imageio.imread(filename) for filename in filenames]
-gif_curve_filename = f"gifs/{exp_name}_curve.gif"
-imageio.mimsave(gif_curve_filename, images)
+    filenames = [
+        f"figures/temp/{exp_name}/learning_curve_full_{t}.png" for t in fig_save_times
+    ]
+    images = [imageio.imread(filename) for filename in filenames]
+    gif_curve_filename = f"gifs/{exp_name}_curve.gif"
+    imageio.mimsave(gif_curve_filename, images)
 
-print("GIF creation complete! Files are in:")
-for fn in [gif_head_0_filename, gif_head_1_filename, gif_curve_filename]:
-    print(fn)
+    print("GIF creation complete! Files are in:")
+    for fn in [gif_head_0_filename, gif_head_1_filename, gif_curve_filename]:
+        print(fn)
 
