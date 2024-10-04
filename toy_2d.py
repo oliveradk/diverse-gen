@@ -66,7 +66,7 @@ class Config():
     target_batch_size: int = 100 
     train_iter: int = 1500
     heads: int = 2 
-    aux_weight: int = 1.0
+    aux_weight: float = 1.0
     mix_rate: Optional[float] = 0.5
     l_01_mix_rate: Optional[float] = None # TODO: geneneralize
     l_10_mix_rate: Optional[float] = None
@@ -128,12 +128,6 @@ def get_exp_name(conf: Config):
     mix_rate_str = f"mix_{conf.mix_rate}" if conf.mix_rate is not None else f"l01_{conf.l_01_mix_rate}_l10_{conf.l_10_mix_rate}"
     gamma_str = f"_gamma_{conf.gamma}" if conf.gamma is not None else ""
     return f"{conf.loss_type.value}_h{conf.heads}_w{conf.aux_weight}_{mix_rate_str}{gamma_str}_tr_s{conf.train_size}_tar_s{conf.target_size}_b{conf.batch_size}_b_tar{conf.target_batch_size}_lr{conf.lr}"
-
-
-# In[ ]:
-
-
-conf.mix_rate
 
 
 # In[ ]:
