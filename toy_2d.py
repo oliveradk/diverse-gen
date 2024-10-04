@@ -23,6 +23,10 @@ if is_notebook():
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
+import matplotlib 
+if not is_notebook():
+    matplotlib.use('Agg')
+
 
 # # 2D Grid
 
@@ -33,6 +37,7 @@ import os
 import sys
 from collections import defaultdict
 from typing import Optional, List
+from tqdm import tqdm
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -73,26 +78,25 @@ class Config():
     gamma: Optional[float] = 1.0
     lr: float = 1e-3
 
-    def __post_init__(self):
-        # set mix rate
-        if self.l_01_mix_rate is not None and self.l_10_mix_rate is None:
-            self.l_10_mix_rate = 0.0
-            if self.mix_rate is None:
-                self.mix_rate = self.l_01_mix_rate
-            assert self.mix_rate == self.l_01_mix_rate
-        elif self.l_01_mix_rate is None and self.l_10_mix_rate is not None:
-            self.l_01_mix_rate = 0.0
-            if self.mix_rate is None:
-                self.mix_rate = self.l_10_mix_rate
-            assert self.mix_rate == self.l_10_mix_rate
-        elif self.l_01_mix_rate is not None and self.l_10_mix_rate is not None:
-            if self.mix_rate is None:
-                self.mix_rate = self.l_01_mix_rate + self.l_10_mix_rate
-            assert self.mix_rate == self.l_01_mix_rate + self.l_10_mix_rate
-        else: # both are none 
-            assert self.mix_rate is not None
-            self.l_01_mix_rate = self.mix_rate / 2
-            self.l_10_mix_rate = self.mix_rate / 2
+def post_init(conf: Config):
+    if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
+        conf.l_10_mix_rate = 0.0
+        if conf.mix_rate is None:
+            conf.mix_rate = conf.l_01_mix_rate
+        assert conf.mix_rate == conf.l_01_mix_rate
+    elif conf.l_01_mix_rate is None and conf.l_10_mix_rate is not None:
+        conf.l_01_mix_rate = 0.0
+        if conf.mix_rate is None:
+            conf.mix_rate = conf.l_10_mix_rate
+        assert conf.mix_rate == conf.l_10_mix_rate
+    elif conf.l_01_mix_rate is not None and conf.l_10_mix_rate is not None:
+        if conf.mix_rate is None:
+            conf.mix_rate = conf.l_01_mix_rate + conf.l_10_mix_rate
+        assert conf.mix_rate == conf.l_01_mix_rate + conf.l_10_mix_rate
+    else: # both are none 
+        assert conf.mix_rate is not None
+        conf.l_01_mix_rate = conf.mix_rate / 2
+        conf.l_10_mix_rate = conf.mix_rate / 2
 
 
 # In[ ]:
@@ -105,6 +109,7 @@ if not is_notebook():
     import sys 
     conf_dict = OmegaConf.merge(OmegaConf.structured(conf), OmegaConf.from_cli(sys.argv[1:]))
     conf = Config(**conf_dict)
+post_init(conf)
 
 
 # In[ ]:
@@ -208,7 +213,7 @@ def plot_head_disagreement(time=""):
 
 #%%
 metrics = defaultdict(list)
-for t in range(conf.train_iter):
+for t in tqdm(range(conf.train_iter), desc="Training"):
     x, y = sample_minibatch(training_data, conf.batch_size)
     logits = net(x)
     logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
@@ -236,9 +241,9 @@ for t in range(conf.train_iter):
     metrics[f"repulsion_loss"].append(repulsion_loss.item())
 
     if t in fig_save_times:
-        print(f"Generating plots for {t}/{conf.train_iter}")
         plot_pred_grid(t)
         plot_head_disagreement(t)
+        plt.close("all")
 
 
 # In[ ]:
@@ -250,7 +255,7 @@ net = nn.Sequential(
 )
 opt = torch.optim.Adam(net.parameters())
 
-for t in range(conf.train_iter):
+for t in tqdm(range(conf.train_iter), desc="Training ERM"):
     x, y = sample_minibatch(training_data, conf.batch_size)
     logits = net(x)
     logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
@@ -266,7 +271,6 @@ for t in range(conf.train_iter):
         corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
         acc_i = corrects_i.float().mean()
         metrics[f"ERM_acc_{i}"].append(acc_i.item())
-        print(acc_i.item())
 
 
 # In[ ]:
@@ -307,9 +311,10 @@ savefig(f"temp/{exp_name}/learning_curve_full")
 draw_full_curve(with_erm=True)
 savefig(f"temp/{exp_name}/learning_curve_full_with_ERM")
 
-for t in fig_save_times:
+for t in tqdm(fig_save_times, desc="Drawing learning curves"):
     draw_full_curve(t=t)
     savefig(f"temp/{exp_name}/learning_curve_full_{t}")
+    plt.close("all")
 
 plt.figure(figsize=(8, 2))
 N = 10
@@ -334,8 +339,9 @@ savefig(f"temp/{exp_name}/learning_curve_with_ERM")
 
 
 #%% Stitch figures into gifs
-import imageio
+import imageio.v2 as imageio
 os.makedirs("gifs", exist_ok=True)
+print("making gifs")
 
 filenames = [f"figures/temp/{exp_name}/{t}_h0.png" for t in fig_save_times]
 images = [imageio.imread(filename) for filename in filenames]

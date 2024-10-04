@@ -34,7 +34,6 @@ class ACELoss(t.nn.Module):
         # focal weight (0, 1) = (1 - (1-p_1) * p_2) ^ gamma
 
         probs = t.sigmoid(logits)
-        print(probs.max(), probs.min())
         assert probs.shape == logits.shape
 
         # I guess easier to just seperate them 
@@ -94,7 +93,6 @@ class ACELoss(t.nn.Module):
             disaggrement_weight = t.abs(probs[:, 0] - probs[:, 1])
             # weight = t.max(t.stack([uncertainty_weight, disaggrement_weight], dim=-1), dim=-1).values
             weight = 1
-            print("frac uncertainty weight", (uncertainty_weight > disaggrement_weight).float().mean())
             loss = weight * t.min(t.stack([loss_0_1, loss_1_0], dim=-1), dim=-1).values
         elif self.mode == 'focal':
             # old version (focal weight)

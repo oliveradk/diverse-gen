@@ -111,5 +111,4 @@ def savefig(name, transparent=False, pdf=False):
             plt.savefig(file_name, dpi=300, bbox_inches="tight", transparent=True)
         else:
             plt.savefig(file_name, dpi=300, facecolor="white", bbox_inches="tight")
-    plt.show()
     plt.clf()
