@@ -55,13 +55,6 @@ from toy_data.grid import generate_data, plot_data, sample_minibatch, savefig
 # In[ ]:
 
 
-# TODO: add focal loss to ERM and ACE loss 
-# for ACE, do (1-P_1*P_2)
-
-
-# In[ ]:
-
-
 from dataclasses import dataclass 
 @dataclass
 class Config():
@@ -134,7 +127,7 @@ plot_data(ex_data)
 def get_exp_name(conf: Config):
     mix_rate_str = f"mix_{conf.mix_rate}" if conf.mix_rate is not None else f"l01_{conf.l_01_mix_rate}_l10_{conf.l_10_mix_rate}"
     gamma_str = f"_gamma_{conf.gamma}" if conf.gamma is not None else ""
-    return f"{conf.loss_type}_h{conf.heads}_w{conf.aux_weight}_{mix_rate_str}{gamma_str}_tr_s{conf.train_size}_tar_s{conf.target_size}_b{conf.batch_size}_b_tar{conf.target_batch_size}_lr{conf.lr}"
+    return f"{conf.loss_type.value}_h{conf.heads}_w{conf.aux_weight}_{mix_rate_str}{gamma_str}_tr_s{conf.train_size}_tar_s{conf.target_size}_b{conf.batch_size}_b_tar{conf.target_batch_size}_lr{conf.lr}"
 
 
 # In[ ]:
