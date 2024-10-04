@@ -68,18 +68,17 @@ class Config():
     seed: int = 45 
     loss_type: LossType = LossType.PROB
     train_size: int = 500 
-    test_size: int = 5000
+    target_size: int = 5000
     batch_size: int = 32 
-    test_batch_size: int = 100 
-    train_iter: int = 3000 
+    target_batch_size: int = 100 
+    train_iter: int = 1500
     heads: int = 2 
     aux_weight: int = 1.0
-    mix_rate: Optional[float] = 1.0
+    mix_rate: Optional[float] = 0.5
     l_01_mix_rate: Optional[float] = None # TODO: geneneralize
     l_10_mix_rate: Optional[float] = None
     gamma: Optional[float] = 1.0
     lr: float = 1e-3
-    train_separate: bool = False
 
     def __post_init__(self):
         # set mix rate
@@ -125,8 +124,8 @@ np.random.seed(conf.seed)
 # In[ ]:
 
 
-test_data = generate_data(5000, mix_rate=0.1)
-plot_data(test_data)
+ex_data= generate_data(5000, mix_rate=0.1)
+plot_data(ex_data)
 
 
 # In[ ]:
@@ -135,7 +134,7 @@ plot_data(test_data)
 def get_exp_name(conf: Config):
     mix_rate_str = f"mix_{conf.mix_rate}" if conf.mix_rate is not None else f"l01_{conf.l_01_mix_rate}_l10_{conf.l_10_mix_rate}"
     gamma_str = f"_gamma_{conf.gamma}" if conf.gamma is not None else ""
-    return f"{conf.loss_type}_h{conf.heads}_w{conf.aux_weight}_{mix_rate_str}{gamma_str}_tr_s{conf.train_size}_te_s{conf.test_size}_b{conf.batch_size}_b_te{conf.test_batch_size}_lr{conf.lr}_separate{conf.train_separate}"
+    return f"{conf.loss_type}_h{conf.heads}_w{conf.aux_weight}_{mix_rate_str}{gamma_str}_tr_s{conf.train_size}_tar_s{conf.target_size}_b{conf.batch_size}_b_tar{conf.target_batch_size}_lr{conf.lr}"
 
 
 # In[ ]:
@@ -154,9 +153,10 @@ fig_save_times = sorted(
     [1, 2, 3, 4, 8, 16, 32, 64, 120, 128] + [50 * n for n in range(conf.train_iter // 50)]
 )
 
-training_data = generate_data(500, train=True)
+training_data = generate_data(conf.train_size, train=True)
 quad_proportions = [conf.l_01_mix_rate, (1-conf.mix_rate)/2, conf.l_10_mix_rate, (1-conf.mix_rate)/2]
-test_data = generate_data(5000, quadrant_proportions=quad_proportions)
+target_data = generate_data(conf.target_size, quadrant_proportions=quad_proportions)
+test_data = generate_data(conf.target_size, mix_rate=0.5)
 
 net = torch.nn.Sequential(
     torch.nn.Linear(2, 40), nn.ReLU(), nn.Linear(40, 40), nn.ReLU(), nn.Linear(40, conf.heads)
@@ -228,7 +228,7 @@ for t in range(conf.train_iter):
     losses = [F.binary_cross_entropy_with_logits(logit, y) for logit in logits_chunked]
     xent = sum(losses)
 
-    target_x, target_y = sample_minibatch(test_data, conf.test_batch_size)
+    target_x, target_y = sample_minibatch(target_data, conf.target_batch_size)
     target_logits = net(target_x)
     repulsion_loss = loss_fn(target_logits)
 
@@ -237,8 +237,12 @@ for t in range(conf.train_iter):
     full_loss.backward()
     opt.step()
 
+    test_x, test_y = sample_minibatch(test_data, conf.target_batch_size)
+    with torch.no_grad():
+        test_logits = net(test_x)
+
     for i in range(conf.heads):
-        corrects_i = (target_logits[:, i] > 0) == target_y.flatten()
+        corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
         acc_i = corrects_i.float().mean()
         metrics[f"acc_{i}"].append(acc_i.item())
     metrics[f"xent"].append(xent.item())
@@ -269,10 +273,10 @@ for t in range(conf.train_iter):
     full_loss.backward()
     opt.step()
 
-    target_x, target_y = sample_minibatch(test_data, conf.test_batch_size)
-    target_logits = net(target_x)
+    test_x, test_y = sample_minibatch(test_data, conf.target_batch_size)
+    test_logits = net(test_x)
     for i in range(conf.heads):
-        corrects_i = (target_logits[:, i] > 0) == target_y.flatten()
+        corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
         acc_i = corrects_i.float().mean()
         metrics[f"ERM_acc_{i}"].append(acc_i.item())
         print(acc_i.item())
