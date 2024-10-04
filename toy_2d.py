@@ -219,7 +219,6 @@ def plot_head_disagreement(time=""):
 # In[ ]:
 
 
-#%%
 metrics = defaultdict(list)
 for t in tqdm(range(conf.train_iter), desc="Training"):
     x, y = sample_minibatch(training_data, conf.batch_size)
@@ -265,7 +264,7 @@ for t in tqdm(range(conf.train_iter), desc="Training"):
 # In[ ]:
 
 
-#%% Train single ERM model (for comparison in learning curve)
+# Train single ERM model (for comparison in learning curve)
 net = nn.Sequential(
     nn.Linear(2, 40), nn.ReLU(), nn.Linear(40, 40), nn.ReLU(), nn.Linear(40, conf.heads)
 )
@@ -302,7 +301,7 @@ with open(f"metrics/{exp_name}.json", "w") as f:
 # In[ ]:
 
 
-#%% Draw learning curves
+# Draw learning curves
 def draw_full_curve(t=None, with_erm=False):
     fig, axs = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(8, 6))
     N = 10
@@ -364,7 +363,7 @@ savefig(f"temp/{exp_name}/learning_curve_with_ERM")
 # In[ ]:
 
 
-#%% Stitch figures into gifs
+# Stitch figures into gifs
 import imageio.v2 as imageio
 os.makedirs("gifs", exist_ok=True)
 print("making gifs")
