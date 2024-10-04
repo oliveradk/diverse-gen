@@ -76,7 +76,7 @@ class Config():
     target_size: int = 5000
     batch_size: int = 32 
     target_batch_size: int = 100 
-    train_iter: int = 200#1500
+    train_iter: int = 1500
     heads: int = 2 
     aux_weight: float = 1.0
     mix_rate: Optional[float] = 0.5
