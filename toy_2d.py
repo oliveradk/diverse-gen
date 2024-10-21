@@ -70,21 +70,23 @@ from toy_data.grid import generate_data, plot_data, sample_minibatch, savefig
 from dataclasses import dataclass 
 @dataclass
 class Config():
-    seed: int = 45 
+    seed: int = 45
     loss_type: LossType = LossType.PROB
     train_size: int = 500 
     target_size: int = 5000
     batch_size: int = 32 
     target_batch_size: int = 100 
-    train_iter: int = 1500
+    train_iter: int = 10_000
     heads: int = 2 
     aux_weight: float = 1.0
     mix_rate: Optional[float] = 0.5
     l_01_mix_rate: Optional[float] = None # TODO: geneneralize
     l_10_mix_rate: Optional[float] = None
     gamma: Optional[float] = 1.0
+    mix_rate_lower_bound: Optional[float] = 0.01
+    inbalance_ratio: Optional[bool] = True
     lr: float = 1e-3
-    make_gifs: bool = False
+    make_gifs: bool = True
 
 def post_init(conf: Config):
     if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
@@ -105,6 +107,9 @@ def post_init(conf: Config):
         assert conf.mix_rate is not None
         conf.l_01_mix_rate = conf.mix_rate / 2
         conf.l_10_mix_rate = conf.mix_rate / 2
+    
+    if conf.mix_rate_lower_bound is None:
+        conf.mix_rate_lower_bound = conf.mix_rate
 
 
 # In[ ]:
@@ -139,8 +144,9 @@ plot_data(ex_data)
 
 def get_exp_name(conf: Config):
     mix_rate_str = f"mix_{conf.mix_rate}" if conf.mix_rate is not None else f"l01_{conf.l_01_mix_rate}_l10_{conf.l_10_mix_rate}"
+    mix_rate_str += f"_lb_{conf.mix_rate_lower_bound}"
     gamma_str = f"_gamma_{conf.gamma}" if conf.gamma is not None else ""
-    return f"{conf.loss_type.value}_h{conf.heads}_w{conf.aux_weight}_{mix_rate_str}{gamma_str}_tr_s{conf.train_size}_tar_s{conf.target_size}_b{conf.batch_size}_b_tar{conf.target_batch_size}_lr{conf.lr}"
+    return f"{conf.loss_type.value}_h{conf.heads}_w{conf.aux_weight}_{mix_rate_str}{gamma_str}_bal_{conf.inbalance_ratio}_tr_s{conf.train_size}_tar_s{conf.target_size}_b{conf.batch_size}_b_tar{conf.target_batch_size}_lr{conf.lr}_iter{conf.train_iter}"
 
 
 # In[ ]:
@@ -154,6 +160,7 @@ fig_save_times = sorted(
 )
 
 training_data = generate_data(conf.train_size, train=True)
+held_out_source_data = generate_data(conf.train_size, train=True) # used for infer only
 quad_proportions = [conf.l_01_mix_rate, (1-conf.mix_rate)/2, conf.l_10_mix_rate, (1-conf.mix_rate)/2]
 target_data = generate_data(conf.target_size, quadrant_proportions=quad_proportions)
 test_data = generate_data(conf.target_size // 2, mix_rate=0.5)
@@ -170,8 +177,9 @@ else:
         heads=conf.heads, 
         mode=conf.loss_type.value, 
         gamma=conf.gamma,
-        l_01_rate=conf.l_01_mix_rate, 
-        l_10_rate=conf.l_10_mix_rate, 
+        inbalance_ratio=conf.inbalance_ratio,
+        l_01_rate=conf.mix_rate_lower_bound / 2, 
+        l_10_rate=conf.mix_rate_lower_bound / 2, 
     )
 
 
@@ -230,8 +238,9 @@ for t in tqdm(range(conf.train_iter), desc="Training"):
 
     target_x, target_y = sample_minibatch(target_data, conf.target_batch_size)
     target_logits = net(target_x)
-    repulsion_loss = loss_fn(target_logits)
 
+    repulsion_loss_args = []
+    repulsion_loss = loss_fn(target_logits, *repulsion_loss_args)
     full_loss = xent + conf.aux_weight * repulsion_loss
     opt.zero_grad()
     full_loss.backward()
@@ -256,7 +265,7 @@ for t in tqdm(range(conf.train_iter), desc="Training"):
     metrics[f"xent"].append(xent.item())
     metrics[f"repulsion_loss"].append(repulsion_loss.item())
 
-    if t in fig_save_times:
+    if conf.make_gifs and t in fig_save_times:
         plot_pred_grid(t)
         plot_head_disagreement(t)
         plt.close("all")

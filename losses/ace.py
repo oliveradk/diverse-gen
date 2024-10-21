@@ -3,6 +3,21 @@ from typing import Literal, Optional
 
 from scipy.stats import binom
 
+def compute_head_losses(probs: t.Tensor):
+    head_0_0 = t.nn.functional.binary_cross_entropy(
+        probs[:, 0], t.zeros_like(probs[:, 0]), reduction='none'
+    )
+    head_0_1 = t.nn.functional.binary_cross_entropy(
+        probs[:, 0], t.ones_like(probs[:, 0]), reduction='none'
+    )
+    head_1_0 = t.nn.functional.binary_cross_entropy(
+        probs[:, 1], t.zeros_like(probs[:, 1]), reduction='none'
+    )
+    head_1_1 = t.nn.functional.binary_cross_entropy(
+        probs[:, 1], t.ones_like(probs[:, 1]), reduction='none'
+    )
+    return head_0_0, head_0_1, head_1_0, head_1_1
+
 class ACELoss(t.nn.Module):
 
 
@@ -11,6 +26,8 @@ class ACELoss(t.nn.Module):
         heads=2,
         mode: Literal['focal', 'exp', 'prob', 'conf'] = 'exp',
         gamma: Optional[int]=1, 
+        inbalance_ratio: bool = False,
+        normalize_prob: bool = True,
         l_01_rate: Optional[float]=0.25, 
         l_10_rate: Optional[float]=0.25, 
     ):
@@ -19,6 +36,8 @@ class ACELoss(t.nn.Module):
         self.heads = heads # assume 2 heads for now
         self.gamma = gamma
         self.mode = mode
+        self.inbalance_ratio = inbalance_ratio 
+        self.normalize_prob = normalize_prob
         self.l_01_rate = l_01_rate
         self.l_10_rate = l_10_rate
 
@@ -37,21 +56,7 @@ class ACELoss(t.nn.Module):
         assert probs.shape == logits.shape
 
         # I guess easier to just seperate them 
-        head_0_0 = t.nn.functional.binary_cross_entropy(
-            probs[:, 0], t.zeros_like(probs[:, 0]), reduction='none'
-        )
-        head_0_0 = t.nn.functional.binary_cross_entropy(
-            probs[:, 0], t.zeros_like(probs[:, 0]), reduction='none'
-        )
-        head_0_1 = t.nn.functional.binary_cross_entropy(
-            probs[:, 0], t.ones_like(probs[:, 0]), reduction='none'
-        )
-        head_1_0 = t.nn.functional.binary_cross_entropy(
-            probs[:, 1], t.zeros_like(probs[:, 1]), reduction='none'
-        )
-        head_1_1 = t.nn.functional.binary_cross_entropy(
-            probs[:, 1], t.ones_like(probs[:, 1]), reduction='none'
-        )
+        head_0_0, head_0_1, head_1_0, head_1_1 = compute_head_losses(probs)
         if self.mode == 'exp':
             loss_0_1 = head_0_0 + head_1_1
             loss_1_0 = head_1_0 + head_0_1
@@ -75,11 +80,21 @@ class ACELoss(t.nn.Module):
             weights_01 = t.zeros(bs)
             weights_10 = t.zeros(bs)
             for i in range(1, bs+1):
-                weights_01[:i] += (binom.pmf(i, bs, self.l_01_rate) / i) * (bs / i)
-                weights_10[:i] += (binom.pmf(i, bs, self.l_10_rate) / i) * (bs / i)
+                weight_update_01 = binom.pmf(i, bs, self.l_01_rate) / i
+                weight_update_10 = binom.pmf(i, bs, self.l_10_rate) / i
+                if self.inbalance_ratio:
+                    weight_update_01 *= bs / i
+                    weight_update_10 *= bs / i
+                weights_01[:i] += weight_update_01
+                weights_10[:i] += weight_update_10
+            if self.normalize_prob:
+                weights_01 *= 1 / (1 - binom.pmf(0, bs, self.l_01_rate))
+                weights_10 *= 1 / (1 - binom.pmf(0, bs, self.l_10_rate))
             loss_0_1 = loss_0_1 * weights_01
             loss_1_0 = loss_1_0 * weights_10
             loss = loss_0_1 + loss_1_0
+
+
         elif self.mode == 'conf': # TODO: for weight, 
             # at first, encourages disagreement amoung uncertain samples 
             # then, encourages disaggreement amoung samples that disagree
