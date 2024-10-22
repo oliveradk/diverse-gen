@@ -39,6 +39,7 @@ from typing import Optional, Callable
 from tqdm import tqdm
 from collections import defaultdict
 from functools import partial
+from datetime import datetime
 
 from omegaconf import OmegaConf
 import numpy as np
@@ -68,16 +69,23 @@ from models.lenet import LeNet
 # In[ ]:
 
 
+# next steps: 
+# try clip vit 
+# run same set of experimetns as in grid (20 epochs?) average acc, acc over tiem 
+# run experiments showing generalization across mix rates
+
+
+# In[ ]:
+
+
 from dataclasses import dataclass 
 @dataclass
 class Config():
     seed: int = 45
     loss_type: LossType = LossType.PROB
-    train_size: int = 500 
-    target_size: int = 5000
     batch_size: int = 128
     target_batch_size: int = 128
-    epochs: int = 100
+    epochs: int = 10
     heads: int = 2 
     model: str = "Resnet50"
     shared_backbone: bool = True
@@ -90,7 +98,7 @@ class Config():
     inbalance_ratio: Optional[bool] = True
     lr: float = 1e-3
     weight_decay: float = 1e-5
-    make_gifs: bool = True
+    vertical: bool = True
     device = "mps"
     
 def post_init(conf: Config):
@@ -118,6 +126,8 @@ def post_init(conf: Config):
 
     if conf.loss_type == LossType.DIVDIS:
         conf.aux_weight = 10.0
+    if conf.loss_type == LossType.EXP: 
+        conf.target_batch_size = round(4 / conf.mix_rate)
 
 
 # In[ ]:
@@ -136,6 +146,24 @@ post_init(conf)
 # In[ ]:
 
 
+# create directory from config
+def conf_to_dir_name(conf: Config):        
+    dir_name = f"{conf.loss_type.name}_{conf.model}_{conf.mix_rate}_{conf.mix_rate_lower_bound}_{conf.epochs}_{conf.seed}"
+    return dir_name
+cifar_mnist_dir_name = "output/cifar_mnist"
+dir_name = f"{cifar_mnist_dir_name}/{conf_to_dir_name(conf)}"
+datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+exp_dir = f"{dir_name}/{datetime_str}"
+os.makedirs(exp_dir, exist_ok=True)
+
+# save full config to exp_dir
+with open(f"{exp_dir}/config.yaml", "w") as f:
+    OmegaConf.save(config=conf, f=f)
+
+
+# In[ ]:
+
+
 torch.manual_seed(conf.seed)
 np.random.seed(conf.seed)
 
@@ -143,8 +171,26 @@ np.random.seed(conf.seed)
 # In[ ]:
 
 
-seed = 42
-torch.manual_seed(seed)
+model_transform = None
+if conf.model == "Resnet50":
+    from torchvision import models
+    from torchvision.models.resnet import ResNet50_Weights
+    resnet50 = models.resnet50(weights=ResNet50_Weights.DEFAULT)
+    model_builder = lambda: torch.nn.Sequential(*list(resnet50.children())[:-1])
+    feature_dim = 2048
+elif conf.model == "ClipViT":
+    from transformers import CLIPVisionModel
+    model_builder = lambda: CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch16")
+    feature_dim = 768
+    input_size = 96
+    model_transform = transforms.Compose([
+        transforms.Resize((224, 224), interpolation=transforms.InterpolationMode.BICUBIC)
+    ])
+elif conf.model == "LeNet":
+    from models.lenet import LeNet
+    from functools import partial
+    model_builder = lambda: partial(LeNet, num_classes=1, dropout_p=0.0)
+    feature_dim = 256
 
 
 # In[ ]:
@@ -157,14 +203,15 @@ mnist_transform = transforms.Compose([
     transforms.Lambda(lambda x: F.pad(x.repeat(3, 1, 1), (2, 2, 2, 2), 'constant', 0))
 ])
 
+
 # get full datasets 
 mnist_train = torchvision.datasets.MNIST('./data/mnist/', train=True, download=True, transform=mnist_transform)
 cifar_train = torchvision.datasets.CIFAR10('./data/cifar10/', train=True, download=True, transform=transform)
 mnist_test = torchvision.datasets.MNIST('./data/mnist/', train=False, download=True, transform=mnist_transform)
 cifar_test = torchvision.datasets.CIFAR10('./data/cifar10/', train=False, download=True, transform=transform)
 
-mnist_target, mnist_train, mnist_val = random_split(mnist_train, [10000, 45000, 5000], generator=torch.Generator().manual_seed(42))
-cifar_target, cifar_train, cifar_val = random_split(cifar_train, [10000, 35000, 5000], generator=torch.Generator().manual_seed(42))
+mnist_target, mnist_train, mnist_source_val, mnist_target_val = random_split(mnist_train, [10000, 45000, 2500, 2500], generator=torch.Generator().manual_seed(42))
+cifar_target, cifar_train, cifar_source_val, cifar_target_val = random_split(cifar_train, [10000, 35000, 2500, 2500], generator=torch.Generator().manual_seed(42))
 
 
 # In[ ]:
@@ -174,7 +221,7 @@ cifar_target, cifar_train, cifar_val = random_split(cifar_train, [10000, 35000, 
 # 1-mix_rate is the number of cifar cars and 0's + cifar trucks and 1's (default)
 # 0_9 corresponds to cifar trucks and mnist 0's 
 # 1_1 corresponds to cifar cars and mnist 1's 
-def generate_dataset(mnist_data, cifar_data, mix_rate_0_9, mix_rate_1_1):
+def generate_dataset(mnist_data, cifar_data, mix_rate_0_9, mix_rate_1_1, vertical=False, transform=None):
     # filter by labels
     mnist_0 = [(img, label) for img, label in mnist_data if label == 0]
     mnist_1 = [(img, label) for img, label in mnist_data if label == 1]
@@ -204,7 +251,8 @@ def generate_dataset(mnist_data, cifar_data, mix_rate_0_9, mix_rate_1_1):
     # construct dataset
     images, labels, group_labels = zip(*data_pairs)
     # concatenate images
-    images = [torch.cat([cifar_img, mnist_img], dim=2) for cifar_img, mnist_img in images]
+    cat_dim = 1 if vertical else 2
+    images = [torch.cat([mnist_img, cifar_img], dim=cat_dim) for cifar_img, mnist_img in images]
     images = torch.stack(images)
     # labels and group labels 
     labels = torch.tensor(labels).to(torch.float32)
@@ -212,16 +260,19 @@ def generate_dataset(mnist_data, cifar_data, mix_rate_0_9, mix_rate_1_1):
     # shuffle dataset
     shuffle = torch.randperm(len(images))
     images = images[shuffle]
+    if transform is not None:
+        images = transform(images)
     labels = labels[shuffle]
     group_labels = group_labels[shuffle]
     dataset = TensorDataset(images, labels, group_labels)
     return dataset
 
 # generate datasets
-source_train = generate_dataset(mnist_train, cifar_train, mix_rate_0_9=0.0, mix_rate_1_1=0.0)
-source_val = generate_dataset(mnist_val, cifar_val, mix_rate_0_9=0, mix_rate_1_1=0)
-target_train = generate_dataset(mnist_target, cifar_target, mix_rate_0_9=conf.l_01_mix_rate, mix_rate_1_1=conf.l_10_mix_rate)
-target_test = generate_dataset(mnist_test, cifar_test, mix_rate_0_9=0.25, mix_rate_1_1=0.25)
+source_train = generate_dataset(mnist_train, cifar_train, mix_rate_0_9=0.0, mix_rate_1_1=0.0, vertical=conf.vertical, transform=model_transform)
+source_val = generate_dataset(mnist_source_val, cifar_source_val, mix_rate_0_9=0.0, mix_rate_1_1=0.0, vertical=conf.vertical, transform=model_transform)
+target_train = generate_dataset(mnist_target, cifar_target, mix_rate_0_9=conf.l_01_mix_rate, mix_rate_1_1=conf.l_10_mix_rate, vertical=conf.vertical, transform=model_transform)
+target_val = generate_dataset(mnist_target_val, cifar_target_val, mix_rate_0_9=conf.l_01_mix_rate, mix_rate_1_1=conf.l_10_mix_rate, vertical=conf.vertical, transform=model_transform)
+target_test = generate_dataset(mnist_test, cifar_test, mix_rate_0_9=0.25, mix_rate_1_1=0.25, vertical=conf.vertical, transform=model_transform)
 
 
 
@@ -254,15 +305,6 @@ plt.show()
 # In[ ]:
 
 
-if conf.model == "Resnet50":
-    from torchvision import models
-    from torchvision.models.resnet import ResNet50_Weights
-    resnet50 = models.resnet50(weights=ResNet50_Weights.DEFAULT)
-    model_builder = lambda: torch.nn.Sequential(*list(resnet50.children())[:-1])
-    feature_dim = 2048
-elif conf.model == "LeNet":
-    model_builder = lambda: partial(LeNet, num_classes=1, dropout_p=0.0)
-    feature_dim = 256
 if conf.shared_backbone:
     net = MultiHeadBackbone(model_builder(), conf.heads, feature_dim)
 else:
@@ -284,7 +326,7 @@ else:
 # data loaders 
 source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True)
 target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True)
-source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True)
+target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True)
 target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True)
 
 
@@ -292,10 +334,7 @@ target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle
 
 
 metrics = defaultdict(list)
-# source_iter = iter(source_train_loader)
 target_iter = iter(target_train_loader)
-source_val_iter = iter(source_val_loader)
-target_test_iter = iter(target_test_loader)
 for epoch in range(conf.epochs):
     for x, y, gl in tqdm(source_train_loader, desc="Source train"):
         x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
@@ -319,29 +358,33 @@ for epoch in range(conf.epochs):
         full_loss.backward()
         opt.step()
 
-        # try: 
-        #     test_x, test_y, test_gl = next(target_test_iter)
-        # except StopIteration:
-        #     target_test_iter = iter(target_test_loader)
-        #     test_x, test_y, test_gl = next(target_test_iter)
-        # with torch.no_grad():
-        #     test_logits = net(test_x).squeeze()
-
-        # TODO: accuracy according to different group labels
-        # for i in range(conf.heads):
-        #     corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
-        #     acc_i = corrects_i.float().mean()
-        #     metrics[f"acc_{i}"].append(acc_i.item())
-
-        #     corrects_i_alt = (test_logits[:, i] > 0) == test_gl[:, 1].flatten()
-        #     acc_i_alt = corrects_i_alt.float().mean()
-        #     metrics[f"acc_{i}_alt"].append(acc_i_alt.item())
-
         metrics[f"xent"].append(xent.item())
         metrics[f"repulsion_loss"].append(repulsion_loss.item())
-    # Compute aggregate metrics over the entire test set after each epoch
-    if (epoch + 1) % 1 == 0:  # You can adjust this to compute less frequently if needed
+    # Compute loss on target validation set (used for model selection)
+    # and aggregate metrics over the entire test set (should not really be using)
+    if (epoch + 1) % 1 == 0:
         net.eval()
+        # compute repulsion loss on target validation set (used for model selection)
+        repulsion_loss_val = []
+        with torch.no_grad():
+            for x, y, gl in tqdm(target_val_loader, desc="Target val"):
+                x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
+                logits_val = net(x)
+                repulsion_loss_val.append(conf.aux_weight * loss_fn(logits_val, * repulsion_loss_args).item())
+        metrics[f"target_val_repulsion_loss"].append(np.mean(repulsion_loss_val))
+        # compute xent on source validation set
+        xent_val = []
+        with torch.no_grad():
+            for x, y, gl in tqdm(source_train_loader, desc="Source val"):
+                x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
+                logits_val = net(x)
+                logits_chunked_val = torch.chunk(logits_val, conf.heads, dim=-1)
+                losses_val = [F.binary_cross_entropy_with_logits(logit.squeeze(), y) for logit in logits_chunked_val]
+                xent_val.append(sum(losses_val).item())
+        metrics[f"source_val_xent"].append(np.mean(xent_val))
+        metrics[f"target_val_loss"].append(np.mean(repulsion_loss_val) + np.mean(xent_val))
+
+        # compute accuracy over target test set (used to evaluate actual performance)
         total_correct = torch.zeros(conf.heads)
         total_correct_alt = torch.zeros(conf.heads)
         total_samples = 0
@@ -361,26 +404,48 @@ for epoch in range(conf.epochs):
             metrics[f"epoch_acc_{i}_alt"].append((total_correct_alt[i] / total_samples).item())
         
         print(f"Epoch {epoch + 1} Test Accuracies:")
+        # print validation losses
+        print(f"Target val repulsion loss: {metrics[f'target_val_repulsion_loss'][-1]:.4f}")
+        print(f"Target val xent: {metrics[f'source_val_xent'][-1]:.4f}")
+        print(f"Target val loss: {metrics[f'target_val_loss'][-1]:.4f}")
         for i in range(conf.heads):
             print(f"Head {i}: {metrics[f'epoch_acc_{i}'][-1]:.4f}, Alt: {metrics[f'epoch_acc_{i}_alt'][-1]:.4f}")
         
         net.train()
 
+metrics = dict(metrics)
 # save metrics 
 import json 
-os.makedirs("metrics", exist_ok=True)
-with open(f"metrics/cifar_mnist.json", "w") as f:
+with open(f"{exp_dir}/metrics.json", "w") as f:
     json.dump(metrics, f, indent=4)
 
 
 # In[ ]:
 
 
-# print loss
 plt.plot(metrics["xent"], label="xent", color="red")
 plt.plot(metrics["repulsion_loss"], label="repulsion_loss", color="blue")
 plt.legend()
+plt.yscale("log")
 plt.show()
+if not is_notebook():
+    plt.close()
+
+
+# In[ ]:
+
+
+# print loss
+# plt.plot(metrics["xent"], label="xent", color="pink")
+# plt.plot(metrics["repulsion_loss"], label="repulsion_loss", color="lightblue")
+plt.plot(metrics["source_val_xent"], label="source_val_xent", color="red")
+plt.plot(metrics["target_val_repulsion_loss"], label="target_val_repulsion_loss", color="blue")
+plt.plot(metrics["target_val_loss"], label="target_val_loss", color="green")
+plt.legend()
+plt.yscale("log")
+plt.show()
+if not is_notebook():
+    plt.close()
 
 
 # In[ ]:
@@ -388,16 +453,12 @@ plt.show()
 
 # print metrics
 # plot acc_0 and acc_1 and acc_0_alt and acc_1_alt
-plt.plot(metrics["acc_0"], label="acc_0", color="blue")
-plt.plot(metrics["acc_1"], label="acc_1", color="green")
-plt.plot(metrics["acc_0_alt"], label="acc_0_alt", color="lightblue")
-plt.plot(metrics["acc_1_alt"], label="acc_1_alt", color="lightgreen")
+plt.plot(metrics["epoch_acc_0"], label="acc_0", color="blue")
+plt.plot(metrics["epoch_acc_1"], label="acc_1", color="green")
+plt.plot(metrics["epoch_acc_0_alt"], label="acc_0_alt", color="lightblue")
+plt.plot(metrics["epoch_acc_1_alt"], label="acc_1_alt", color="lightgreen")
 plt.legend()
 plt.show()
-
-
-# In[ ]:
-
-
-
+if not is_notebook():
+    plt.close()
 
