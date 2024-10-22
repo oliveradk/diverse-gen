@@ -69,15 +69,6 @@ from models.lenet import LeNet
 # In[ ]:
 
 
-# next steps: 
-# try clip vit 
-# run same set of experimetns as in grid (20 epochs?) average acc, acc over tiem 
-# run experiments showing generalization across mix rates
-
-
-# In[ ]:
-
-
 from dataclasses import dataclass 
 @dataclass
 class Config():
@@ -99,7 +90,7 @@ class Config():
     lr: float = 1e-3
     weight_decay: float = 1e-5
     vertical: bool = True
-    device = "mps"
+    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     
 def post_init(conf: Config):
     if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
