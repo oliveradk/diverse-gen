@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -76,7 +76,7 @@ class Config():
     loss_type: LossType = LossType.PROB
     batch_size: int = 128
     target_batch_size: int = 128
-    epochs: int = 10
+    epochs: int = 20
     heads: int = 2 
     model: str = "Resnet50"
     shared_backbone: bool = True
