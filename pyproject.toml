@@ -16,6 +16,7 @@ imageio = "^2.35.1"
 scipy = "^1.14.1"
 omegaconf = "^2.3.0"
 nbconvert = "^7.16.4"
+torchvision = "^0.20.0"
 
 
 [build-system]

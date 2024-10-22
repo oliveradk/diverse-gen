@@ -30,6 +30,7 @@ class ACELoss(t.nn.Module):
         normalize_prob: bool = True,
         l_01_rate: Optional[float]=0.25, 
         l_10_rate: Optional[float]=0.25, 
+        device: str = "cpu"
     ):
         super().__init__()
         assert heads == 2
@@ -40,6 +41,7 @@ class ACELoss(t.nn.Module):
         self.normalize_prob = normalize_prob
         self.l_01_rate = l_01_rate
         self.l_10_rate = l_10_rate
+        self.device = device
 
     
     def forward(self, logits):
@@ -64,7 +66,7 @@ class ACELoss(t.nn.Module):
             loss_0_1, _ = loss_0_1.sort()
             loss_1_0, _ = loss_1_0.sort()
             # apply exponential weight [e^-0, ..., e^N]
-            exp_weight = t.exp(-t.arange(loss_0_1.shape[0]))
+            exp_weight = t.exp(-t.arange(loss_0_1.shape[0], device=self.device))
             loss_0_1 = loss_0_1 * exp_weight
             loss_1_0 = loss_1_0 * exp_weight
             loss = loss_0_1 + loss_1_0
@@ -77,8 +79,8 @@ class ACELoss(t.nn.Module):
             loss_0_1, _ = loss_0_1.sort()
             loss_1_0, _ = loss_1_0.sort()
             bs = logits.shape[0]
-            weights_01 = t.zeros(bs)
-            weights_10 = t.zeros(bs)
+            weights_01 = t.zeros(bs, device=self.device)
+            weights_10 = t.zeros(bs, device=self.device)
             for i in range(1, bs+1):
                 weight_update_01 = binom.pmf(i, bs, self.l_01_rate) / i
                 weight_update_10 = binom.pmf(i, bs, self.l_10_rate) / i
@@ -107,7 +109,7 @@ class ACELoss(t.nn.Module):
             # disagreement weight
             disaggrement_weight = t.abs(probs[:, 0] - probs[:, 1])
             # weight = t.max(t.stack([uncertainty_weight, disaggrement_weight], dim=-1), dim=-1).values
-            weight = 1
+            weight = t.tensor(1, device=self.device)
             loss = weight * t.min(t.stack([loss_0_1, loss_1_0], dim=-1), dim=-1).values
         elif self.mode == 'focal':
             # old version (focal weight)
