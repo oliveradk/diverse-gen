@@ -18,6 +18,7 @@ omegaconf = "^2.3.0"
 nbconvert = "^7.16.4"
 torchvision = "^0.20.0"
 submitit = "^1.5.2"
+ipykernel = "^6.29.5"
 
 
 [build-system]
