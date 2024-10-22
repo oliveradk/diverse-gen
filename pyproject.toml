@@ -17,6 +17,7 @@ scipy = "^1.14.1"
 omegaconf = "^2.3.0"
 nbconvert = "^7.16.4"
 torchvision = "^0.20.0"
+submitit = "^1.5.2"
 
 
 [build-system]
