@@ -71,19 +71,9 @@ from datasets.cifar_mnist import get_cifar_mnist_datasets
 # In[ ]:
 
 
-# ok might just be that ACE results are fake, or are severly cherry-picked with "unfair" hyperparameter optimization
-# don't get too attached to EXP or Prob, just report results as results 
-# TODO: more rigourous hyperparameter optimization (sweep through leerning rate run for 2 epochs, pick best according source validation accuracy)
-# TODO: sweep through aux weight, pick based on un-weighted validation loss 
-# TODO: write report
 # TODO: add dbat 
 # TODO: add other vision datasets 
 # TODO: add language datasets 
-
-# then the general contribution is "following [model selection paper], we introduce a new alorighm for model selection when learning diverse classifiers on unlabeled data"
-# we also benchmark methods against datasets with variable mix rates, with some methods that incorperate distributional information
-
-# finally, we apply methods to weak-to-strong, easy-to-hard, and measurement-tampering datasets, finding x,y,z
 
 
 # In[ ]:
@@ -96,7 +86,7 @@ class Config():
     loss_type: LossType = LossType.DIVDIS
     batch_size: int = 128
     target_batch_size: int = 128
-    epochs: int = 100
+    epochs: int = 20
     heads: int = 2 
     model: str = "Resnet50"
     shared_backbone: bool = True
@@ -309,6 +299,28 @@ else:
 # In[ ]:
 
 
+from losses.ace import compute_head_losses
+
+def get_orderings(logits: torch.Tensor):
+    probs = torch.sigmoid(logits)
+    head_0_0, head_0_1, head_1_0, head_1_1 = compute_head_losses(probs)
+    loss_0_1 = head_0_0 + head_1_1
+    loss_1_0 = head_1_0 + head_0_1
+    loss_0_1, indices_0_1 = loss_0_1.sort()
+    loss_1_0, indices_1_0 = loss_1_0.sort()
+    return loss_0_1, loss_1_0, indices_0_1, indices_1_0
+
+
+
+# In[ ]:
+
+
+conf.epochs = 10
+
+
+# In[ ]:
+
+
 metrics = defaultdict(list)
 target_iter = iter(target_train_loader)
 for epoch in range(conf.epochs):
@@ -329,6 +341,23 @@ for epoch in range(conf.epochs):
 
         repulsion_loss_args = []
         repulsion_loss = loss_fn(target_logits, *repulsion_loss_args)
+        # TODO: log ordering of target instances according to L_01 and L_10
+        loss_0_1, loss_1_0, indices_0_1, indices_1_0 = get_orderings(target_logits)
+        # log group labels according to ordering
+        metrics[f"target_loss_0_1_ordering"].append(target_gl[indices_0_1].tolist())
+        metrics[f"target_loss_1_0_ordering"].append(target_gl[indices_1_0].tolist())
+        # log false positive and false negative rates for each loss 
+        # i.e. fp = number of instances in top batch_size * mix_rate_lower_bound / 2 that don't have (0,1)/(1/0)
+        # i.e. fn = number of instances not in top batch_size * mix_rate_lower_bound / 2 that have (0,1)/(1/0)
+        k = conf.target_batch_size * conf.mix_rate_lower_bound / 2 
+        fp_0_1 = (target_gl[indices_0_1[:int(k)]] != torch.tensor([0, 1]).to(conf.device)).all(dim=1).float().mean().item()
+        fp_1_0 = (target_gl[indices_1_0[:int(k)]] != torch.tensor([1, 0]).to(conf.device)).all(dim=1).float().mean().item()
+        fn_0_1 = (target_gl[indices_0_1[int(k):]] == torch.tensor([0, 1]).to(conf.device)).all(dim=1).float().mean().item() 
+        fn_1_0 = (target_gl[indices_1_0[int(k):]] == torch.tensor([1, 0]).to(conf.device)).all(dim=1).float().mean().item()
+        metrics[f"target_fp_0_1"].append(fp_0_1)
+        metrics[f"target_fp_1_0"].append(fp_1_0)
+        metrics[f"target_fn_0_1"].append(fn_0_1)
+        metrics[f"target_fn_1_0"].append(fn_1_0)
         full_loss = xent + conf.aux_weight * repulsion_loss
         opt.zero_grad()
         full_loss.backward()
@@ -451,6 +480,35 @@ if not is_notebook():
 # In[ ]:
 
 
-# find maximum target validation set weighted repulsion loss
+# plot false positive and false negative rates
+plt.plot(metrics["target_fp_0_1"], label="target_fp_0_1", color="blue")
+plt.plot(metrics["target_fp_1_0"], label="target_fp_1_0", color="green")
+plt.plot(metrics["target_fn_0_1"], label="target_fn_0_1", color="lightblue")
+plt.plot(metrics["target_fn_1_0"], label="target_fn_1_0", color="lightgreen")
+plt.legend()
+plt.show()
+if not is_notebook():
+    plt.close()
+
+
+# In[ ]:
+
+
+# find index of minimum val_weighted_loss, target_val_weighted_repulsion_loss 
+min_val_weighted_loss_idx = np.argmin(metrics["val_weighted_loss"])
+min_target_val_weighted_repulsion_loss_idx = np.argmin(metrics["target_val_weighted_repulsion_loss"])
+# get maximum acc (max of max(acc_0, acc_1))
+accs = np.maximum(np.array(metrics["epoch_acc_0"]), np.array(metrics["epoch_acc_1"]))
+max_acc_idx = np.argmax(accs)
+# get accs for min val_weighted_loss and min target_val_weighted_repulsion_loss 
+val_weighted_loss_acc = accs[min_val_weighted_loss_idx]
+target_val_weighted_repulsion_loss_acc = accs[min_target_val_weighted_repulsion_loss_idx]
+max_acc = accs[max_acc_idx]
+
+# plot max_acc, val_weighted_loss_acc, target_val_weighted_repulsion_loss_acc as a bar chart 
+plt.bar(["max", "weighted_loss", "weighted_repulsion_loss"], [max_acc, val_weighted_loss_acc, target_val_weighted_repulsion_loss_acc])
+plt.show()
+if not is_notebook():
+    plt.close()
 
 
