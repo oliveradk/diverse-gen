@@ -86,7 +86,7 @@ class Config():
     loss_type: LossType = LossType.DIVDIS
     batch_size: int = 128
     target_batch_size: int = 128
-    epochs: int = 20
+    epochs: int = 100
     heads: int = 2 
     model: str = "Resnet50"
     shared_backbone: bool = True
