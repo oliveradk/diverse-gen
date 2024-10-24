@@ -97,8 +97,8 @@ class Config():
     gamma: Optional[float] = 1.0
     mix_rate_lower_bound: Optional[float] = 0.5
     inbalance_ratio: Optional[bool] = True
-    lr: float = 1e-3 # default for clipvit
-    weight_decay: float = 1e-5
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
     lr_scheduler: Optional[str] = "cosine"# "cosine"
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
@@ -131,8 +131,6 @@ def post_init(conf: Config, overrides: list[str]=[]):
     
     if conf.loss_type == LossType.DIVDIS and "aux_weight" not in overrides:
         conf.aux_weight = 10.0
-    # if conf.loss_type == LossType.EXP and "target_batch_size" not in overrides: 
-    #     conf.target_batch_size = round(4 / conf.mix_rate_lower_bound)
     if conf.model == "ClipViT" and "lr" not in overrides:
         conf.lr = 5e-5
     if conf.model == "ClipViT" and "lr_scheduler" not in overrides:
@@ -315,6 +313,19 @@ def get_orderings(logits: torch.Tensor):
 # In[ ]:
 
 
+def compute_accs(logits: torch.Tensor, gl: torch.Tensor):
+    with torch.no_grad():
+        acc = torch.zeros(conf.heads)
+        acc_alt = torch.zeros(conf.heads)
+        for i in range(conf.heads):
+            acc[i] += ((logits[:, i] > 0) == gl[:, 0].flatten()).to(torch.float32).mean().item()
+            acc_alt[i] += ((logits[:, i] > 0) == gl[:, 1].flatten()).to(torch.float32).mean().item()
+    return acc, acc_alt
+
+
+# In[ ]:
+
+
 metrics = defaultdict(list)
 target_iter = iter(target_train_loader)
 for epoch in range(conf.epochs):
@@ -322,9 +333,10 @@ for epoch in range(conf.epochs):
         x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
         logits = net(x)
         logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
+        # source loss 
         losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y) for logit in logits_chunked]
         xent = sum(losses)
-
+        # target loss 
         try: 
             target_x, target_y, target_gl = next(target_iter)
         except StopIteration:
@@ -332,26 +344,34 @@ for epoch in range(conf.epochs):
             target_x, target_y, target_gl = next(target_iter)
         target_x, target_y, target_gl = target_x.to(conf.device), target_y.to(conf.device), target_gl.to(conf.device)
         target_logits = net(target_x)
-
         repulsion_loss_args = []
         repulsion_loss = loss_fn(target_logits, *repulsion_loss_args)
-        # TODO: log ordering of target instances according to L_01 and L_10
+        # log orderings, false positive and false negative rates for each loss
+        # fp = number of instances in top batch_size * mix_rate_lower_bound / 2 that don't have (0,1)/(1/0)
+        # fn = number of instances not in top batch_size * mix_rate_lower_bound / 2 that have (0,1)/(1/0)
         loss_0_1, loss_1_0, indices_0_1, indices_1_0 = get_orderings(target_logits)
-        # log group labels according to ordering
         metrics[f"target_loss_0_1_ordering"].append(target_gl[indices_0_1].tolist())
         metrics[f"target_loss_1_0_ordering"].append(target_gl[indices_1_0].tolist())
-        # log false positive and false negative rates for each loss 
-        # i.e. fp = number of instances in top batch_size * mix_rate_lower_bound / 2 that don't have (0,1)/(1/0)
-        # i.e. fn = number of instances not in top batch_size * mix_rate_lower_bound / 2 that have (0,1)/(1/0)
         k = conf.target_batch_size * conf.mix_rate_lower_bound / 2 
-        fp_0_1 = (target_gl[indices_0_1[:int(k)]] != torch.tensor([0, 1]).to(conf.device)).all(dim=1).float().mean().item()
-        fp_1_0 = (target_gl[indices_1_0[:int(k)]] != torch.tensor([1, 0]).to(conf.device)).all(dim=1).float().mean().item()
-        fn_0_1 = (target_gl[indices_0_1[int(k):]] == torch.tensor([0, 1]).to(conf.device)).all(dim=1).float().mean().item() 
-        fn_1_0 = (target_gl[indices_1_0[int(k):]] == torch.tensor([1, 0]).to(conf.device)).all(dim=1).float().mean().item()
+        acc, acc_alt = compute_accs(target_logits, target_gl)
+        acc_0_1 = acc[0] + acc_alt[1]
+        acc_1_0 = acc[1] + acc_alt[0]
+        if acc_0_1 > acc_1_0:
+            target_0_1 = torch.tensor([0, 1]).to(conf.device)
+            target_1_0 = torch.tensor([1, 0]).to(conf.device)
+        else:
+            target_0_1 = torch.tensor([1, 0]).to(conf.device)
+            target_1_0 = torch.tensor([0, 1]).to(conf.device)   
+
+        fp_0_1 = (target_gl[indices_0_1[:int(k)]] != target_0_1).all(dim=1).float().mean().item()
+        fp_1_0 = (target_gl[indices_1_0[:int(k)]] != target_1_0).all(dim=1).float().mean().item()
+        fn_0_1 = (target_gl[indices_0_1[int(k):]] == target_0_1).all(dim=1).float().mean().item() 
+        fn_1_0 = (target_gl[indices_1_0[int(k):]] == target_1_0).all(dim=1).float().mean().item()
         metrics[f"target_fp_0_1"].append(fp_0_1)
         metrics[f"target_fp_1_0"].append(fp_1_0)
         metrics[f"target_fn_0_1"].append(fn_0_1)
         metrics[f"target_fn_1_0"].append(fn_1_0)
+        # full loss 
         full_loss = xent + conf.aux_weight * repulsion_loss
         opt.zero_grad()
         full_loss.backward()
@@ -454,6 +474,7 @@ plt.yscale("log")
 plt.show()
 if not is_notebook():
     plt.close()
+plt.savefig(f"{exp_dir}/val_loss.png")
 
 
 # In[ ]:
@@ -469,6 +490,7 @@ plt.legend()
 plt.show()
 if not is_notebook():
     plt.close()
+plt.savefig(f"{exp_dir}/acc.png")
 
 
 # In[ ]:
@@ -483,6 +505,9 @@ plt.legend()
 plt.show()
 if not is_notebook():
     plt.close()
+plt.savefig(f"{exp_dir}/false_positive_false_negative_rates.png")
+
+# TODO: this looks very strange 
 
 
 # In[ ]:
@@ -494,6 +519,9 @@ min_target_val_weighted_repulsion_loss_idx = np.argmin(metrics["target_val_weigh
 # get maximum acc (max of max(acc_0, acc_1))
 accs = np.maximum(np.array(metrics["epoch_acc_0"]), np.array(metrics["epoch_acc_1"]))
 max_acc_idx = np.argmax(accs)
+print(f"max_acc_idx: {max_acc_idx}")
+print(f"min_val_weighted_loss_idx: {min_val_weighted_loss_idx}")
+print(f"min_target_val_weighted_repulsion_loss_idx: {min_target_val_weighted_repulsion_loss_idx}")
 # get accs for min val_weighted_loss and min target_val_weighted_repulsion_loss 
 val_weighted_loss_acc = accs[min_val_weighted_loss_idx]
 target_val_weighted_repulsion_loss_acc = accs[min_target_val_weighted_repulsion_loss_idx]
@@ -501,8 +529,10 @@ max_acc = accs[max_acc_idx]
 
 # plot max_acc, val_weighted_loss_acc, target_val_weighted_repulsion_loss_acc as a bar chart 
 plt.bar(["max", "weighted_loss", "weighted_repulsion_loss"], [max_acc, val_weighted_loss_acc, target_val_weighted_repulsion_loss_acc])
+# show y ticks at every 0.1 
+plt.yticks(np.arange(0, 1.1, 0.1))
 plt.show()
 if not is_notebook():
     plt.close()
-
+plt.savefig(f"{exp_dir}/max_acc_model_selection.png")
 
