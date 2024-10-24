@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -65,6 +65,26 @@ from models.backbone import MultiHeadBackbone
 from models.multi_model import MultiNetModel
 from models.lenet import LeNet
 
+from datasets.cifar_mnist import get_cifar_mnist_datasets
+
+
+# In[ ]:
+
+
+# ok might just be that ACE results are fake, or are severly cherry-picked with "unfair" hyperparameter optimization
+# don't get too attached to EXP or Prob, just report results as results 
+# TODO: more rigourous hyperparameter optimization (sweep through leerning rate run for 2 epochs, pick best according source validation accuracy)
+# TODO: sweep through aux weight, pick based on un-weighted validation loss 
+# TODO: write report
+# TODO: add dbat 
+# TODO: add other vision datasets 
+# TODO: add language datasets 
+
+# then the general contribution is "following [model selection paper], we introduce a new alorighm for model selection when learning diverse classifiers on unlabeled data"
+# we also benchmark methods against datasets with variable mix rates, with some methods that incorperate distributional information
+
+# finally, we apply methods to weak-to-strong, easy-to-hard, and measurement-tampering datasets, finding x,y,z
+
 
 # In[ ]:
 
@@ -73,10 +93,10 @@ from dataclasses import dataclass
 @dataclass
 class Config():
     seed: int = 45
-    loss_type: LossType = LossType.PROB
+    loss_type: LossType = LossType.DIVDIS
     batch_size: int = 128
     target_batch_size: int = 128
-    epochs: int = 20
+    epochs: int = 100
     heads: int = 2 
     model: str = "Resnet50"
     shared_backbone: bool = True
@@ -87,12 +107,16 @@ class Config():
     gamma: Optional[float] = 1.0
     mix_rate_lower_bound: Optional[float] = 0.5
     inbalance_ratio: Optional[bool] = True
-    lr: float = 1e-3
+    lr: float = 1e-3 # default for clipvit
     weight_decay: float = 1e-5
+    lr_scheduler: Optional[str] = "cosine"# "cosine"
+    num_cycles: float = 0.5
+    frac_warmup: float = 0.05
     vertical: bool = True
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-    
-def post_init(conf: Config):
+
+
+def post_init(conf: Config, overrides: list[str]=[]):
     if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
         conf.l_10_mix_rate = 0.0
         if conf.mix_rate is None:
@@ -114,11 +138,15 @@ def post_init(conf: Config):
     
     if conf.mix_rate_lower_bound is None:
         conf.mix_rate_lower_bound = conf.mix_rate
-
-    if conf.loss_type == LossType.DIVDIS:
+    
+    if conf.loss_type == LossType.DIVDIS and "aux_weight" not in overrides:
         conf.aux_weight = 10.0
-    if conf.loss_type == LossType.EXP: 
-        conf.target_batch_size = round(4 / conf.mix_rate)
+    # if conf.loss_type == LossType.EXP and "target_batch_size" not in overrides: 
+    #     conf.target_batch_size = round(4 / conf.mix_rate_lower_bound)
+    if conf.model == "ClipViT" and "lr" not in overrides:
+        conf.lr = 5e-5
+    if conf.model == "ClipViT" and "lr_scheduler" not in overrides:
+        conf.lr_scheduler = "cosine"
 
 
 # In[ ]:
@@ -127,11 +155,14 @@ def post_init(conf: Config):
 # initialize config 
 conf = Config()
 #get config overrides if runnign from command line
+overrride_keys = []
 if not is_notebook():
     import sys 
-    conf_dict = OmegaConf.merge(OmegaConf.structured(conf), OmegaConf.from_cli(sys.argv[1:]))
+    overrides = OmegaConf.from_cli(sys.argv[1:])
+    overrride_keys = overrides.keys()
+    conf_dict = OmegaConf.merge(OmegaConf.structured(conf), overrides)
     conf = Config(**conf_dict)
-post_init(conf)
+post_init(conf, overrride_keys)
 
 
 # In[ ]:
@@ -139,7 +170,7 @@ post_init(conf)
 
 # create directory from config
 def conf_to_dir_name(conf: Config):        
-    dir_name = f"{conf.loss_type.name}_{conf.model}_{conf.mix_rate}_{conf.mix_rate_lower_bound}_{conf.epochs}_{conf.seed}"
+    dir_name = f"{conf.loss_type.name}_{conf.model}_{conf.mix_rate}_{conf.mix_rate_lower_bound}_{conf.lr}_{conf.aux_weight}_{conf.epochs}_{conf.seed}"
     return dir_name
 cifar_mnist_dir_name = "output/cifar_mnist"
 dir_name = f"{cifar_mnist_dir_name}/{conf_to_dir_name(conf)}"
@@ -168,10 +199,16 @@ if conf.model == "Resnet50":
     from torchvision.models.resnet import ResNet50_Weights
     resnet50 = models.resnet50(weights=ResNet50_Weights.DEFAULT)
     model_builder = lambda: torch.nn.Sequential(*list(resnet50.children())[:-1])
+    resnet_50_transforms = ResNet50_Weights.DEFAULT.transforms()
+    model_transform = transforms.Compose([
+        # transforms.Resize(resnet_50_transforms.resize_size * 2, interpolation=resnet_50_transforms.interpolation),
+        # transforms.CenterCrop(resnet_50_transforms.crop_size),
+        transforms.Normalize(mean=resnet_50_transforms.mean, std=resnet_50_transforms.std)
+    ])
     feature_dim = 2048
 elif conf.model == "ClipViT":
-    from transformers import CLIPVisionModel
-    model_builder = lambda: CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch16")
+    from models.clip_vit import ClipViT
+    model_builder = lambda: ClipViT()
     feature_dim = 768
     input_size = 96
     model_transform = transforms.Compose([
@@ -182,89 +219,19 @@ elif conf.model == "LeNet":
     from functools import partial
     model_builder = lambda: partial(LeNet, num_classes=1, dropout_p=0.0)
     feature_dim = 256
+else: 
+    raise ValueError(f"Model {conf.model} not supported")
 
 
 # In[ ]:
 
 
-transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
-
-mnist_transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Lambda(lambda x: F.pad(x.repeat(3, 1, 1), (2, 2, 2, 2), 'constant', 0))
-])
-
-
-# get full datasets 
-mnist_train = torchvision.datasets.MNIST('./data/mnist/', train=True, download=True, transform=mnist_transform)
-cifar_train = torchvision.datasets.CIFAR10('./data/cifar10/', train=True, download=True, transform=transform)
-mnist_test = torchvision.datasets.MNIST('./data/mnist/', train=False, download=True, transform=mnist_transform)
-cifar_test = torchvision.datasets.CIFAR10('./data/cifar10/', train=False, download=True, transform=transform)
-
-mnist_target, mnist_train, mnist_source_val, mnist_target_val = random_split(mnist_train, [10000, 45000, 2500, 2500], generator=torch.Generator().manual_seed(42))
-cifar_target, cifar_train, cifar_source_val, cifar_target_val = random_split(cifar_train, [10000, 35000, 2500, 2500], generator=torch.Generator().manual_seed(42))
-
-
-# In[ ]:
-
-
-# function that generates dataset of concatenated cifar and mnist images
-# 1-mix_rate is the number of cifar cars and 0's + cifar trucks and 1's (default)
-# 0_9 corresponds to cifar trucks and mnist 0's 
-# 1_1 corresponds to cifar cars and mnist 1's 
-def generate_dataset(mnist_data, cifar_data, mix_rate_0_9, mix_rate_1_1, vertical=False, transform=None):
-    # filter by labels
-    mnist_0 = [(img, label) for img, label in mnist_data if label == 0]
-    mnist_1 = [(img, label) for img, label in mnist_data if label == 1]
-    cifar_1 = [(img, label) for img, label in cifar_data if label == 1]
-    cifar_9 = [(img, label) for img, label in cifar_data if label == 9]
-    # get number of samples
-    num_samples = min(len(mnist_0), len(mnist_1), len(cifar_1), len(cifar_9))
-    data_pairs = []
-    num_clean = int(num_samples * (1-mix_rate_0_9 - mix_rate_1_1)) 
-    num_mixed_0_9 = int(num_samples * mix_rate_0_9) 
-    num_mixed_1_1 = int(num_samples * mix_rate_1_1) 
-    i = 0
-    for _ in range(num_clean // 2):
-        # cars and 0's
-        data_pairs.append(((cifar_1[i][0], mnist_0[i][0]), 0, (0, 0))) 
-        # trucks and 1's
-        data_pairs.append(((cifar_9[i][0], mnist_1[i][0]), 1, (1, 1)))
-        i+=1
-    for _ in range(num_mixed_0_9):
-        # trucks and 0's
-        data_pairs.append(((cifar_9[i][0], mnist_0[i][0]), 1, (1, 0)))
-        i+=1
-    for _ in range(num_mixed_1_1):
-        # cars and 1's
-        data_pairs.append(((cifar_1[i][0], mnist_1[i][0]), 0, (0, 1)))
-        i+=1
-    # construct dataset
-    images, labels, group_labels = zip(*data_pairs)
-    # concatenate images
-    cat_dim = 1 if vertical else 2
-    images = [torch.cat([mnist_img, cifar_img], dim=cat_dim) for cifar_img, mnist_img in images]
-    images = torch.stack(images)
-    # labels and group labels 
-    labels = torch.tensor(labels).to(torch.float32)
-    group_labels = torch.tensor([list(gl) for gl in group_labels]).to(torch.float32)
-    # shuffle dataset
-    shuffle = torch.randperm(len(images))
-    images = images[shuffle]
-    if transform is not None:
-        images = transform(images)
-    labels = labels[shuffle]
-    group_labels = group_labels[shuffle]
-    dataset = TensorDataset(images, labels, group_labels)
-    return dataset
-
-# generate datasets
-source_train = generate_dataset(mnist_train, cifar_train, mix_rate_0_9=0.0, mix_rate_1_1=0.0, vertical=conf.vertical, transform=model_transform)
-source_val = generate_dataset(mnist_source_val, cifar_source_val, mix_rate_0_9=0.0, mix_rate_1_1=0.0, vertical=conf.vertical, transform=model_transform)
-target_train = generate_dataset(mnist_target, cifar_target, mix_rate_0_9=conf.l_01_mix_rate, mix_rate_1_1=conf.l_10_mix_rate, vertical=conf.vertical, transform=model_transform)
-target_val = generate_dataset(mnist_target_val, cifar_target_val, mix_rate_0_9=conf.l_01_mix_rate, mix_rate_1_1=conf.l_10_mix_rate, vertical=conf.vertical, transform=model_transform)
-target_test = generate_dataset(mnist_test, cifar_test, mix_rate_0_9=0.25, mix_rate_1_1=0.25, vertical=conf.vertical, transform=model_transform)
-
+source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
+    vertical=conf.vertical, 
+    mix_rate_0_9=conf.l_01_mix_rate, 
+    mix_rate_1_1=conf.l_10_mix_rate, 
+    transform=model_transform
+)
 
 
 # In[ ]:
@@ -296,12 +263,35 @@ plt.show()
 # In[ ]:
 
 
+# data loaders 
+source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True)
+target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True)
+target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True)
+target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True)
+
+# classifiers
+from transformers import get_cosine_schedule_with_warmup
 if conf.shared_backbone:
     net = MultiHeadBackbone(model_builder(), conf.heads, feature_dim)
 else:
     net = MultiNetModel(heads=conf.heads, model_builder=model_builder)
 net = net.to(conf.device)
+
+# optimizer
 opt = torch.optim.AdamW(net.parameters(), lr=conf.lr, weight_decay=conf.weight_decay)
+num_steps = conf.epochs * len(source_train_loader)
+if conf.lr_scheduler == "cosine":       
+    scheduler = get_cosine_schedule_with_warmup(
+        opt, 
+        num_warmup_steps=num_steps * conf.frac_warmup, 
+        num_training_steps=num_steps, 
+        num_cycles=conf.num_cycles
+    )
+else: 
+    # constant learning rate
+    scheduler = None
+
+# loss function
 if conf.loss_type == LossType.DIVDIS:
     loss_fn = DivDisLoss(heads=conf.heads)
 else:
@@ -314,11 +304,6 @@ else:
         l_10_rate=conf.mix_rate_lower_bound / 2, 
         device=conf.device
     )
-# data loaders 
-source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True)
-target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True)
-target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True)
-target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True)
 
 
 # In[ ]:
@@ -348,6 +333,8 @@ for epoch in range(conf.epochs):
         opt.zero_grad()
         full_loss.backward()
         opt.step()
+        if scheduler is not None:
+            scheduler.step()
 
         metrics[f"xent"].append(xent.item())
         metrics[f"repulsion_loss"].append(repulsion_loss.item())
@@ -356,13 +343,17 @@ for epoch in range(conf.epochs):
     if (epoch + 1) % 1 == 0:
         net.eval()
         # compute repulsion loss on target validation set (used for model selection)
-        repulsion_loss_val = []
+        repulsion_losses_val = []
+        weighted_repulsion_losses_val = []
         with torch.no_grad():
             for x, y, gl in tqdm(target_val_loader, desc="Target val"):
                 x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
                 logits_val = net(x)
-                repulsion_loss_val.append(conf.aux_weight * loss_fn(logits_val, * repulsion_loss_args).item())
-        metrics[f"target_val_repulsion_loss"].append(np.mean(repulsion_loss_val))
+                repulsion_loss_val = loss_fn(logits_val, *repulsion_loss_args)
+                repulsion_losses_val.append(repulsion_loss_val.item())
+                weighted_repulsion_losses_val.append(conf.aux_weight * repulsion_loss_val.item())
+        metrics[f"target_val_repulsion_loss"].append(np.mean(repulsion_losses_val))
+        metrics[f"target_val_weighted_repulsion_loss"].append(np.mean(weighted_repulsion_losses_val))
         # compute xent on source validation set
         xent_val = []
         with torch.no_grad():
@@ -373,7 +364,8 @@ for epoch in range(conf.epochs):
                 losses_val = [F.binary_cross_entropy_with_logits(logit.squeeze(), y) for logit in logits_chunked_val]
                 xent_val.append(sum(losses_val).item())
         metrics[f"source_val_xent"].append(np.mean(xent_val))
-        metrics[f"target_val_loss"].append(np.mean(repulsion_loss_val) + np.mean(xent_val))
+        metrics[f"val_loss"].append(np.mean(repulsion_losses_val) + np.mean(xent_val))
+        metrics[f"val_weighted_loss"].append(np.mean(weighted_repulsion_losses_val) + np.mean(xent_val))
 
         # compute accuracy over target test set (used to evaluate actual performance)
         total_correct = torch.zeros(conf.heads)
@@ -397,8 +389,10 @@ for epoch in range(conf.epochs):
         print(f"Epoch {epoch + 1} Test Accuracies:")
         # print validation losses
         print(f"Target val repulsion loss: {metrics[f'target_val_repulsion_loss'][-1]:.4f}")
-        print(f"Target val xent: {metrics[f'source_val_xent'][-1]:.4f}")
-        print(f"Target val loss: {metrics[f'target_val_loss'][-1]:.4f}")
+        print(f"Target val weighted repulsion loss: {metrics[f'target_val_weighted_repulsion_loss'][-1]:.4f}")
+        print(f"Source val xent: {metrics[f'source_val_xent'][-1]:.4f}")
+        print(f"val loss: {metrics[f'val_loss'][-1]:.4f}")
+        print(f"val weighted loss: {metrics[f'val_weighted_loss'][-1]:.4f}")
         for i in range(conf.heads):
             print(f"Head {i}: {metrics[f'epoch_acc_{i}'][-1]:.4f}, Alt: {metrics[f'epoch_acc_{i}_alt'][-1]:.4f}")
         
@@ -430,8 +424,8 @@ if not is_notebook():
 # plt.plot(metrics["xent"], label="xent", color="pink")
 # plt.plot(metrics["repulsion_loss"], label="repulsion_loss", color="lightblue")
 plt.plot(metrics["source_val_xent"], label="source_val_xent", color="red")
-plt.plot(metrics["target_val_repulsion_loss"], label="target_val_repulsion_loss", color="blue")
-plt.plot(metrics["target_val_loss"], label="target_val_loss", color="green")
+plt.plot(metrics["target_val_weighted_repulsion_loss"], label="target_val_repulsion_loss", color="blue")
+plt.plot(metrics["val_weighted_loss"], label="val_loss", color="green")
 plt.legend()
 plt.yscale("log")
 plt.show()
@@ -452,4 +446,11 @@ plt.legend()
 plt.show()
 if not is_notebook():
     plt.close()
+
+
+# In[ ]:
+
+
+# find maximum target validation set weighted repulsion loss
+
 
