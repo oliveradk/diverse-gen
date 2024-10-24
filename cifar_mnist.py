@@ -83,7 +83,7 @@ from dataclasses import dataclass
 @dataclass
 class Config():
     seed: int = 45
-    loss_type: LossType = LossType.DIVDIS
+    loss_type: LossType = LossType.PROB
     batch_size: int = 128
     target_batch_size: int = 128
     epochs: int = 100
@@ -310,12 +310,6 @@ def get_orderings(logits: torch.Tensor):
     loss_1_0, indices_1_0 = loss_1_0.sort()
     return loss_0_1, loss_1_0, indices_0_1, indices_1_0
 
-
-
-# In[ ]:
-
-
-conf.epochs = 10
 
 
 # In[ ]:
