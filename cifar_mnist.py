@@ -66,6 +66,7 @@ from models.multi_model import MultiNetModel
 from models.lenet import LeNet
 
 from datasets.cifar_mnist import get_cifar_mnist_datasets
+from utils.exp_utils import get_cifar_mnist_exp_dir
 
 
 # In[ ]:
@@ -157,11 +158,7 @@ post_init(conf, overrride_keys)
 
 
 # create directory from config
-def conf_to_dir_name(conf: Config):        
-    dir_name = f"{conf.loss_type.name}_{conf.model}_{conf.mix_rate}_{conf.mix_rate_lower_bound}_{conf.lr}_{conf.aux_weight}_{conf.epochs}_{conf.seed}"
-    return dir_name
-cifar_mnist_dir_name = "output/cifar_mnist"
-dir_name = f"{cifar_mnist_dir_name}/{conf_to_dir_name(conf)}"
+dir_name = get_cifar_mnist_exp_dir(conf)
 datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 exp_dir = f"{dir_name}/{datetime_str}"
 os.makedirs(exp_dir, exist_ok=True)
@@ -350,8 +347,8 @@ for epoch in range(conf.epochs):
         # fp = number of instances in top batch_size * mix_rate_lower_bound / 2 that don't have (0,1)/(1/0)
         # fn = number of instances not in top batch_size * mix_rate_lower_bound / 2 that have (0,1)/(1/0)
         loss_0_1, loss_1_0, indices_0_1, indices_1_0 = get_orderings(target_logits)
-        metrics[f"target_loss_0_1_ordering"].append(target_gl[indices_0_1].tolist())
-        metrics[f"target_loss_1_0_ordering"].append(target_gl[indices_1_0].tolist())
+        # metrics[f"target_loss_0_1_ordering"].append(target_gl[indices_0_1].tolist())
+        # metrics[f"target_loss_1_0_ordering"].append(target_gl[indices_1_0].tolist())
         k = conf.target_batch_size * conf.mix_rate_lower_bound / 2 
         acc, acc_alt = compute_accs(target_logits, target_gl)
         acc_0_1 = acc[0] + acc_alt[1]
