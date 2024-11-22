@@ -58,6 +58,7 @@ from matplotlib.ticker import NullFormatter
 from losses.divdis import DivDisLoss 
 from losses.divdis import DivDisLoss
 from losses.ace import ACELoss
+from losses.conf import ConfLoss
 from losses.dbat import DBatLoss
 from losses.loss_types import LossType
 
@@ -84,12 +85,12 @@ from dataclasses import dataclass
 @dataclass
 class Config():
     seed: int = 45
-    dataset: str = "cifar_mnist"
+    dataset: str = "fmnist_mnist"
     loss_type: LossType = LossType.TOPK
     batch_size: int = 32#128
     target_batch_size: int = 128#128
     epochs: int = 10
-    heads: int = 2 
+    heads: int = 2
     model: str = "Resnet50"
     shared_backbone: bool = True
     source_weight: float = 1.0
@@ -97,7 +98,7 @@ class Config():
     source_mix_rate: float = 0.0
     source_l_01_mix_rate: Optional[float] = None
     source_l_10_mix_rate: Optional[float] = None
-    mix_rate: Optional[float] = 0.9
+    mix_rate: Optional[float] = 0.5
     l_01_mix_rate: Optional[float] = None # TODO: geneneralize
     l_10_mix_rate: Optional[float] = None
     mix_rate_lower_bound: Optional[float] = 0.5
@@ -317,7 +318,9 @@ else:
 # loss function
 if conf.loss_type == LossType.DIVDIS:
     loss_fn = DivDisLoss(heads=conf.heads)
-else:
+elif conf.loss_type == LossType.CONF:
+    loss_fn = ConfLoss()
+elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
     loss_fn = ACELoss(
         heads=conf.heads, 
         mode=conf.loss_type.value, 
@@ -327,6 +330,8 @@ else:
         all_unlabeled=conf.all_unlabeled,
         device=conf.device
     )
+else:
+    raise ValueError(f"Loss type {conf.loss_type} not supported")
 
 
 # In[ ]:
@@ -345,106 +350,110 @@ def compute_accs(logits: torch.Tensor, gl: torch.Tensor):
 # In[ ]:
 
 
-# visualize data using first two principle componets of final layer activations
-from sklearn.decomposition import PCA
-activations = []
-labels = []
-model = model_builder()
-model = model.to(conf.device)
-for x, y, gl in tqdm(target_test_loader):
-    x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
-    acts = model(x)
-    activations.append((acts.detach().cpu()))
-    labels.append(gl)
-activations = torch.cat(activations, dim=0).squeeze()
-labels = torch.cat(labels, dim=0)
-labels = labels.squeeze()
+def get_acts_and_labels(model: nn.Module, loader: DataLoader):
+    activations = []
+    labels = []
+    model = model_builder()
+    model = model.to(conf.device)
+    for x, y, gl in tqdm(loader):
+        x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
+        acts = model(x)
+        activations.append((acts.detach().cpu()))
+        labels.append(gl)
+    activations = torch.cat(activations, dim=0).squeeze()
+    labels = torch.cat(labels, dim=0)
+    labels = labels.squeeze()
+    return activations, labels
 
 
 # In[ ]:
 
 
-pca = PCA(n_components=2)
-pca.fit(activations)
-activations_pca = pca.transform(activations)
+# visualize data using first two principle componets of final layer activations
 
-# Create a figure with two subplots side by side
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+model = model_builder()
+model = model.to(conf.device)
+activations, labels = get_acts_and_labels(model, target_test_loader)
 
-# Plot first label
-scatter1 = ax1.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 0].to('cpu'), cmap="viridis")
-ax1.set_title('Label 0')
 
-# Plot second label
-scatter2 = ax2.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 1].to('cpu'), cmap="viridis")
-ax2.set_title('Label 1')
+# In[ ]:
 
-plt.tight_layout()
-plt.show()
+
+from sklearn.decomposition import PCA
+if is_notebook():
+    pca = PCA(n_components=2)
+    pca.fit(activations)
+    activations_pca = pca.transform(activations)
+
+    # Create a figure with two subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Plot first label
+    scatter1 = ax1.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 0].to('cpu'), cmap="viridis")
+    ax1.set_title('Label 0')
+
+    # Plot second label
+    scatter2 = ax2.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 1].to('cpu'), cmap="viridis")
+    ax2.set_title('Label 1')
+
+    plt.tight_layout()
+    plt.show()
+
+
+# In[ ]:
+
+
+if is_notebook():
+    group_labels = labels[:, 0] * 2 + labels[:, 1]
+    plt.scatter(activations_pca[:, 0], activations_pca[:, 1], c=group_labels.to('cpu'), cmap="viridis")
+    plt.title("Group labels")
+    plt.show()
 
 
 # In[ ]:
 
 
 from sklearn.linear_model import LogisticRegression
-component_range = [2**i for i in range(1, 9)]
-n_components_accs = []
-for n_components in tqdm(component_range):
-    pca = PCA(n_components=n_components)
-    pca.fit(activations)
-    activations_pca = pca.transform(activations)
-    # fit probe 
-    lr = LogisticRegression(max_iter=1000)
-    lr.fit(activations_pca, labels[:, 0].to('cpu').numpy())
-    acc = lr.score(activations_pca, labels[:, 0].to('cpu').numpy())
-    n_components_accs.append(acc)
-plt.plot(component_range, n_components_accs, label="accuracy")
-plt.show()
+if is_notebook():
+    component_range = [2**i for i in range(1, 9)]
+    n_components_accs = []
+    for n_components in tqdm(component_range):
+        pca = PCA(n_components=n_components)
+        pca.fit(activations)
+        activations_pca = pca.transform(activations)
+        # fit probe 
+        lr = LogisticRegression(max_iter=1000)
+        lr.fit(activations_pca, labels[:, 0].to('cpu').numpy())
+        acc = lr.score(activations_pca, labels[:, 0].to('cpu').numpy())
+        n_components_accs.append(acc)
+    plt.plot(component_range, n_components_accs, label="accuracy")
+    plt.show()
 
 
 # In[ ]:
 
 
 # fit linear probe 
-from sklearn.linear_model import LogisticRegression
-lr = LogisticRegression(max_iter=10000)
-lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
-# get accuracy 
-acc = lr.score(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
-print(f"Accuracy: {acc:.4f}")
+if is_notebook():
+    from sklearn.linear_model import LogisticRegression
+    lr = LogisticRegression(max_iter=10000)
+    lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+    # get accuracy 
+    acc = lr.score(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+    print(f"Accuracy: {acc:.4f}")
 
 
 # In[ ]:
 
 
-pca = PCA(n_components=3)
-pca.fit(activations)
-activations_pca = pca.transform(activations)
-# Create a figure with two 3D subplots side by side
-fig = plt.figure(figsize=(12, 5))
-
-# First 3D plot for label 0
-ax1 = fig.add_subplot(121, projection='3d')
-scatter1 = ax1.scatter(activations_pca[:, 0], activations_pca[:, 1], activations_pca[:,2], 
-                      c=labels[:, 0].to('cpu'), cmap="viridis")
-ax1.view_init(0, 185, 0)
-ax1.set_title('Label 0')
-
-# Second 3D plot for label 1
-ax2 = fig.add_subplot(122, projection='3d')
-scatter2 = ax2.scatter(activations_pca[:, 0], activations_pca[:, 1], activations_pca[:,2], 
-                      c=labels[:, 1].to('cpu'), cmap="viridis")
-ax2.view_init(0, 185, 0)
-ax2.set_title('Label 1')
-
-plt.tight_layout()
-plt.show()
-
-
-# In[ ]:
-
-
-conf.l_01_mix_rate
+if is_notebook():
+    fig = plt.figure(figsize=(12, 5))
+    # Second 3D plot for group labels
+    ax3 = fig.add_subplot(121, projection='3d')
+    scatter3 = ax3.scatter(activations_pca[:, 0], activations_pca[:, 1], activations_pca[:,2], 
+                        c=group_labels.to('cpu'), cmap="viridis")
+    ax3.view_init(25, 210, 0)
+    ax3.set_title('Group labels')
 
 
 # In[ ]:
@@ -516,7 +525,9 @@ for epoch in range(conf.epochs):
         with torch.no_grad():
             for test_x, test_y, test_gl in target_test_loader:
                 test_x, test_y, test_gl = test_x.to(conf.device), test_y.to(conf.device), test_gl.to(conf.device)
-                test_logits = net(test_x).squeeze()
+                # test_logits = net(test_x).squeeze() #
+                test_logits = net(test_x)
+                assert test_logits.shape == (test_x.size(0), conf.heads)
                 total_samples += test_y.size(0)
                 
                 for i in range(conf.heads):
