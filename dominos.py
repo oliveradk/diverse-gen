@@ -111,7 +111,7 @@ class Config():
     frac_warmup: float = 0.05
     vertical: bool = True
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-    exp_name: str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    exp_dir: str = f"output/dominos/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
 def post_init(conf: Config, overrides: list[str]=[]):
     if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
@@ -168,7 +168,7 @@ post_init(conf, overrride_keys)
 
 # create directory from config
 from dataclasses import asdict
-exp_dir = f"output/dominos/{conf.exp_name}"
+exp_dir = conf.exp_dir
 os.makedirs(exp_dir, exist_ok=True)
 
 # save full config to exp_dir
@@ -597,8 +597,6 @@ plt.plot(metrics["epoch_acc_0_alt"], label="acc_0_alt", color="lightblue")
 plt.plot(metrics["epoch_acc_1_alt"], label="acc_1_alt", color="lightgreen")
 plt.legend()
 plt.show()
-if not is_notebook():
-    plt.close()
 plt.savefig(f"{exp_dir}/acc.png")
 
 
@@ -624,7 +622,5 @@ plt.bar(["max", "weighted_loss", "weighted_repulsion_loss"], [max_acc, val_weigh
 # show y ticks at every 0.1 
 plt.yticks(np.arange(0, 1.1, 0.1))
 plt.show()
-if not is_notebook():
-    plt.close()
 plt.savefig(f"{exp_dir}/max_acc_model_selection.png")
 
