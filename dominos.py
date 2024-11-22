@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -66,7 +66,7 @@ from models.multi_model import MultiNetModel
 from models.lenet import LeNet
 
 from datasets.cifar_mnist import get_cifar_mnist_datasets
-from utils.exp_utils import get_cifar_mnist_exp_dir
+from datasets.fmnist_mnist import get_fmnist_mnist_datasets
 
 
 # In[ ]:
@@ -84,28 +84,33 @@ from dataclasses import dataclass
 @dataclass
 class Config():
     seed: int = 45
-    loss_type: LossType = LossType.PROB
-    batch_size: int = 128
-    target_batch_size: int = 128
-    epochs: int = 100
+    dataset: str = "cifar_mnist"
+    loss_type: LossType = LossType.TOPK
+    batch_size: int = 32#128
+    target_batch_size: int = 128#128
+    epochs: int = 10
     heads: int = 2 
     model: str = "Resnet50"
     shared_backbone: bool = True
+    source_weight: float = 1.0
     aux_weight: float = 1.0
-    mix_rate: Optional[float] = 0.5
+    source_mix_rate: float = 0.0
+    source_l_01_mix_rate: Optional[float] = None
+    source_l_10_mix_rate: Optional[float] = None
+    mix_rate: Optional[float] = 0.9
     l_01_mix_rate: Optional[float] = None # TODO: geneneralize
     l_10_mix_rate: Optional[float] = None
-    gamma: Optional[float] = 1.0
     mix_rate_lower_bound: Optional[float] = 0.5
-    inbalance_ratio: Optional[bool] = True
-    lr: float = 1e-3
-    weight_decay: float = 1e-4
-    lr_scheduler: Optional[str] = "cosine"# "cosine"
+    all_unlabeled: bool = False
+    inbalance_ratio: Optional[bool] = False
+    lr: float = 1e-3 #1e-3
+    weight_decay: float = 1e-3 #1e-4
+    lr_scheduler: Optional[str] = None #"cosine"# "cosine"
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
     vertical: bool = True
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-
+    exp_name: str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 def post_init(conf: Config, overrides: list[str]=[]):
     if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
@@ -127,11 +132,14 @@ def post_init(conf: Config, overrides: list[str]=[]):
         conf.l_01_mix_rate = conf.mix_rate / 2
         conf.l_10_mix_rate = conf.mix_rate / 2
     
+    conf.source_l_01_mix_rate = conf.source_mix_rate / 2
+    conf.source_l_10_mix_rate = conf.source_mix_rate / 2
+    
     if conf.mix_rate_lower_bound is None:
         conf.mix_rate_lower_bound = conf.mix_rate
     
     if conf.loss_type == LossType.DIVDIS and "aux_weight" not in overrides:
-        conf.aux_weight = 10.0
+        conf.aux_weight = 1.0
     if conf.model == "ClipViT" and "lr" not in overrides:
         conf.lr = 5e-5
     if conf.model == "ClipViT" and "lr_scheduler" not in overrides:
@@ -141,7 +149,7 @@ def post_init(conf: Config, overrides: list[str]=[]):
 # In[ ]:
 
 
-# initialize config 
+# initialize config
 conf = Config()
 #get config overrides if runnign from command line
 overrride_keys = []
@@ -158,9 +166,8 @@ post_init(conf, overrride_keys)
 
 
 # create directory from config
-dir_name = get_cifar_mnist_exp_dir(conf)
-datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-exp_dir = f"{dir_name}/{datetime_str}"
+from dataclasses import asdict
+exp_dir = f"output/dominos/{conf.exp_name}"
 os.makedirs(exp_dir, exist_ok=True)
 
 # save full config to exp_dir
@@ -179,6 +186,7 @@ np.random.seed(conf.seed)
 
 
 model_transform = None
+pad_sides = False
 if conf.model == "Resnet50":
     from torchvision import models
     from torchvision.models.resnet import ResNet50_Weights
@@ -186,19 +194,30 @@ if conf.model == "Resnet50":
     model_builder = lambda: torch.nn.Sequential(*list(resnet50.children())[:-1])
     resnet_50_transforms = ResNet50_Weights.DEFAULT.transforms()
     model_transform = transforms.Compose([
-        # transforms.Resize(resnet_50_transforms.resize_size * 2, interpolation=resnet_50_transforms.interpolation),
-        # transforms.CenterCrop(resnet_50_transforms.crop_size),
+        transforms.Resize(resnet_50_transforms.resize_size * 2, interpolation=resnet_50_transforms.interpolation),
+        transforms.CenterCrop(resnet_50_transforms.crop_size),
         transforms.Normalize(mean=resnet_50_transforms.mean, std=resnet_50_transforms.std)
     ])
+    pad_sides = True
     feature_dim = 2048
 elif conf.model == "ClipViT":
-    from models.clip_vit import ClipViT
-    model_builder = lambda: ClipViT()
-    feature_dim = 768
-    input_size = 96
+    # from models.clip_vit import ClipViT
+    # model_builder = lambda: ClipViT()
+    # feature_dim = 768
+    # input_size = 96
+    # model_transform = transforms.Compose([
+    #     transforms.Resize((224, 224), interpolation=transforms.InterpolationMode.BICUBIC)
+    # ])
+    import clip 
+    clip_model, preprocess = clip.load('ViT-B/32', device='cpu')
+    model_builder = lambda: clip_model.visual
     model_transform = transforms.Compose([
-        transforms.Resize((224, 224), interpolation=transforms.InterpolationMode.BICUBIC)
+        preprocess.transforms[0],
+        preprocess.transforms[1],
+        preprocess.transforms[4]
     ])
+    feature_dim = 512
+    pad_sides = True
 elif conf.model == "LeNet":
     from models.lenet import LeNet
     from functools import partial
@@ -211,27 +230,45 @@ else:
 # In[ ]:
 
 
-source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
-    vertical=conf.vertical, 
-    mix_rate_0_9=conf.l_01_mix_rate, 
-    mix_rate_1_1=conf.l_10_mix_rate, 
-    transform=model_transform
-)
+if conf.dataset == "cifar_mnist":
+    source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
+        vertical=conf.vertical, 
+        source_mix_rate_0_1=conf.source_l_01_mix_rate, 
+        source_mix_rate_1_0=conf.source_l_10_mix_rate, 
+        target_mix_rate_0_1=conf.l_01_mix_rate, 
+        target_mix_rate_1_0=conf.l_10_mix_rate, 
+        transform=model_transform, 
+        pad_sides=pad_sides
+    )
+elif conf.dataset == "fmnist_mnist":
+    source_train, source_val, target_train, target_val, target_test = get_fmnist_mnist_datasets(
+        vertical=conf.vertical, 
+        source_mix_rate_0_1=conf.source_l_01_mix_rate, 
+        source_mix_rate_1_0=conf.source_l_10_mix_rate, 
+        target_mix_rate_0_1=conf.l_01_mix_rate, 
+        target_mix_rate_1_0=conf.l_10_mix_rate, 
+        transform=model_transform, 
+        pad_sides=pad_sides
+    )
+else:
+    raise ValueError(f"Dataset {conf.dataset} not supported")
 
 
 # In[ ]:
 
 
-assert sum([gl[0] == gl[1] for _, _, gl in target_test]) / len(target_test) == 0.5
+source_labels = [source_train[i][1:3] for i in range(len(source_train))]
+assert all([l[1][0] == l[1][1] for l in source_labels])
+target_labels = [target_train[i][1:3] for i in range(len(target_train))]
+np.mean([l[1][0] == l[1][1] for l in target_labels])
 
 
 # In[ ]:
 
 
-# plot source images with vision_utils.make_grid
-cifar_mnist_grid = torch.stack([source_train[i][0] for i in range(20)])
-grid_img = vision_utils.make_grid(cifar_mnist_grid, nrow=10, normalize=True, padding=1)
-plt.imshow(grid_img.permute(1, 2, 0))
+# plot image 
+img = source_train[0][0]
+plt.imshow(img.permute(1, 2, 0))
 plt.show()
 
 
@@ -250,6 +287,7 @@ plt.show()
 
 # data loaders 
 source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True)
+source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True)
 target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True)
 target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True)
 target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True)
@@ -283,28 +321,12 @@ else:
     loss_fn = ACELoss(
         heads=conf.heads, 
         mode=conf.loss_type.value, 
-        gamma=conf.gamma,
         inbalance_ratio=conf.inbalance_ratio,
         l_01_rate=conf.mix_rate_lower_bound / 2, 
         l_10_rate=conf.mix_rate_lower_bound / 2, 
+        all_unlabeled=conf.all_unlabeled,
         device=conf.device
     )
-
-
-# In[ ]:
-
-
-from losses.ace import compute_head_losses
-
-def get_orderings(logits: torch.Tensor):
-    probs = torch.sigmoid(logits)
-    head_0_0, head_0_1, head_1_0, head_1_1 = compute_head_losses(probs)
-    loss_0_1 = head_0_0 + head_1_1
-    loss_1_0 = head_1_0 + head_0_1
-    loss_0_1, indices_0_1 = loss_0_1.sort()
-    loss_1_0, indices_1_0 = loss_1_0.sort()
-    return loss_0_1, loss_1_0, indices_0_1, indices_1_0
-
 
 
 # In[ ]:
@@ -323,10 +345,115 @@ def compute_accs(logits: torch.Tensor, gl: torch.Tensor):
 # In[ ]:
 
 
+# visualize data using first two principle componets of final layer activations
+from sklearn.decomposition import PCA
+activations = []
+labels = []
+model = model_builder()
+model = model.to(conf.device)
+for x, y, gl in tqdm(target_test_loader):
+    x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
+    acts = model(x)
+    activations.append((acts.detach().cpu()))
+    labels.append(gl)
+activations = torch.cat(activations, dim=0).squeeze()
+labels = torch.cat(labels, dim=0)
+labels = labels.squeeze()
+
+
+# In[ ]:
+
+
+pca = PCA(n_components=2)
+pca.fit(activations)
+activations_pca = pca.transform(activations)
+
+# Create a figure with two subplots side by side
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+# Plot first label
+scatter1 = ax1.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 0].to('cpu'), cmap="viridis")
+ax1.set_title('Label 0')
+
+# Plot second label
+scatter2 = ax2.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 1].to('cpu'), cmap="viridis")
+ax2.set_title('Label 1')
+
+plt.tight_layout()
+plt.show()
+
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+component_range = [2**i for i in range(1, 9)]
+n_components_accs = []
+for n_components in tqdm(component_range):
+    pca = PCA(n_components=n_components)
+    pca.fit(activations)
+    activations_pca = pca.transform(activations)
+    # fit probe 
+    lr = LogisticRegression(max_iter=1000)
+    lr.fit(activations_pca, labels[:, 0].to('cpu').numpy())
+    acc = lr.score(activations_pca, labels[:, 0].to('cpu').numpy())
+    n_components_accs.append(acc)
+plt.plot(component_range, n_components_accs, label="accuracy")
+plt.show()
+
+
+# In[ ]:
+
+
+# fit linear probe 
+from sklearn.linear_model import LogisticRegression
+lr = LogisticRegression(max_iter=10000)
+lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+# get accuracy 
+acc = lr.score(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+print(f"Accuracy: {acc:.4f}")
+
+
+# In[ ]:
+
+
+pca = PCA(n_components=3)
+pca.fit(activations)
+activations_pca = pca.transform(activations)
+# Create a figure with two 3D subplots side by side
+fig = plt.figure(figsize=(12, 5))
+
+# First 3D plot for label 0
+ax1 = fig.add_subplot(121, projection='3d')
+scatter1 = ax1.scatter(activations_pca[:, 0], activations_pca[:, 1], activations_pca[:,2], 
+                      c=labels[:, 0].to('cpu'), cmap="viridis")
+ax1.view_init(0, 185, 0)
+ax1.set_title('Label 0')
+
+# Second 3D plot for label 1
+ax2 = fig.add_subplot(122, projection='3d')
+scatter2 = ax2.scatter(activations_pca[:, 0], activations_pca[:, 1], activations_pca[:,2], 
+                      c=labels[:, 1].to('cpu'), cmap="viridis")
+ax2.view_init(0, 185, 0)
+ax2.set_title('Label 1')
+
+plt.tight_layout()
+plt.show()
+
+
+# In[ ]:
+
+
+conf.l_01_mix_rate
+
+
+# In[ ]:
+
+
 metrics = defaultdict(list)
 target_iter = iter(target_train_loader)
 for epoch in range(conf.epochs):
-    for x, y, gl in tqdm(source_train_loader, desc="Source train"):
+    for batch_idx, (x, y, gl) in tqdm(enumerate(source_train_loader), desc="Source train", total=len(source_train_loader)):
         x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
         logits = net(x)
         logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
@@ -341,35 +468,9 @@ for epoch in range(conf.epochs):
             target_x, target_y, target_gl = next(target_iter)
         target_x, target_y, target_gl = target_x.to(conf.device), target_y.to(conf.device), target_gl.to(conf.device)
         target_logits = net(target_x)
-        repulsion_loss_args = []
-        repulsion_loss = loss_fn(target_logits, *repulsion_loss_args)
-        # log orderings, false positive and false negative rates for each loss
-        # fp = number of instances in top batch_size * mix_rate_lower_bound / 2 that don't have (0,1)/(1/0)
-        # fn = number of instances not in top batch_size * mix_rate_lower_bound / 2 that have (0,1)/(1/0)
-        loss_0_1, loss_1_0, indices_0_1, indices_1_0 = get_orderings(target_logits)
-        # metrics[f"target_loss_0_1_ordering"].append(target_gl[indices_0_1].tolist())
-        # metrics[f"target_loss_1_0_ordering"].append(target_gl[indices_1_0].tolist())
-        k = conf.target_batch_size * conf.mix_rate_lower_bound / 2 
-        acc, acc_alt = compute_accs(target_logits, target_gl)
-        acc_0_1 = acc[0] + acc_alt[1]
-        acc_1_0 = acc[1] + acc_alt[0]
-        if acc_0_1 > acc_1_0:
-            target_0_1 = torch.tensor([0, 1]).to(conf.device)
-            target_1_0 = torch.tensor([1, 0]).to(conf.device)
-        else:
-            target_0_1 = torch.tensor([1, 0]).to(conf.device)
-            target_1_0 = torch.tensor([0, 1]).to(conf.device)   
-
-        fp_0_1 = (target_gl[indices_0_1[:int(k)]] != target_0_1).all(dim=1).float().mean().item()
-        fp_1_0 = (target_gl[indices_1_0[:int(k)]] != target_1_0).all(dim=1).float().mean().item()
-        fn_0_1 = (target_gl[indices_0_1[int(k):]] == target_0_1).all(dim=1).float().mean().item() 
-        fn_1_0 = (target_gl[indices_1_0[int(k):]] == target_1_0).all(dim=1).float().mean().item()
-        metrics[f"target_fp_0_1"].append(fp_0_1)
-        metrics[f"target_fp_1_0"].append(fp_1_0)
-        metrics[f"target_fn_0_1"].append(fn_0_1)
-        metrics[f"target_fn_1_0"].append(fn_1_0)
+        repulsion_loss = loss_fn(target_logits)
         # full loss 
-        full_loss = xent + conf.aux_weight * repulsion_loss
+        full_loss = conf.source_weight * xent + conf.aux_weight * repulsion_loss
         opt.zero_grad()
         full_loss.backward()
         opt.step()
@@ -389,7 +490,7 @@ for epoch in range(conf.epochs):
             for x, y, gl in tqdm(target_val_loader, desc="Target val"):
                 x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
                 logits_val = net(x)
-                repulsion_loss_val = loss_fn(logits_val, *repulsion_loss_args)
+                repulsion_loss_val = loss_fn(logits_val)
                 repulsion_losses_val.append(repulsion_loss_val.item())
                 weighted_repulsion_losses_val.append(conf.aux_weight * repulsion_loss_val.item())
         metrics[f"target_val_repulsion_loss"].append(np.mean(repulsion_losses_val))
@@ -397,7 +498,7 @@ for epoch in range(conf.epochs):
         # compute xent on source validation set
         xent_val = []
         with torch.no_grad():
-            for x, y, gl in tqdm(source_train_loader, desc="Source val"):
+            for x, y, gl in tqdm(source_val_loader, desc="Source val"):
                 x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
                 logits_val = net(x)
                 logits_chunked_val = torch.chunk(logits_val, conf.heads, dim=-1)
@@ -488,23 +589,6 @@ plt.show()
 if not is_notebook():
     plt.close()
 plt.savefig(f"{exp_dir}/acc.png")
-
-
-# In[ ]:
-
-
-# plot false positive and false negative rates
-plt.plot(metrics["target_fp_0_1"], label="target_fp_0_1", color="blue")
-plt.plot(metrics["target_fp_1_0"], label="target_fp_1_0", color="green")
-plt.plot(metrics["target_fn_0_1"], label="target_fn_0_1", color="lightblue")
-plt.plot(metrics["target_fn_1_0"], label="target_fn_1_0", color="lightgreen")
-plt.legend()
-plt.show()
-if not is_notebook():
-    plt.close()
-plt.savefig(f"{exp_dir}/false_positive_false_negative_rates.png")
-
-# TODO: this looks very strange 
 
 
 # In[ ]:

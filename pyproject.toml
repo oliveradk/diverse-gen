@@ -19,6 +19,8 @@ nbconvert = "^7.16.4"
 torchvision = "^0.20.0"
 submitit = "^1.5.2"
 ipykernel = "^6.29.5"
+clip = {git = "https://github.com/openai/CLIP.git"}
+scikit-learn = "^1.5.2"
 
 
 [build-system]

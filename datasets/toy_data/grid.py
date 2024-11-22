@@ -4,12 +4,15 @@ import os
 
 from matplotlib import pyplot as plt
 
+
 def generate_data(
     num_datapoints, 
     quadrant_proportions=None, 
     mix_rate=None, 
     train=False, 
-    swap_y_meaning=False
+    swap_y_meaning=False, 
+    gaussian=False,
+    std=1.0
 ):
     """
     Generate data with customizable proportions in each quadrant.
@@ -45,18 +48,46 @@ def generate_data(
     x1, x2, y = [], [], []
 
     for q, n_points in enumerate(quadrant_points):
-        if q == 0:  # Q1: x1 > 0 0, x2 > 0
-            x1_q = np.random.uniform(0, 1, (n_points, 1))
-            x2_q = np.random.uniform(0, 1, (n_points, 1))
-        elif q == 1:  # Q2: x1 < 0, x2 > 0
-            x1_q = np.random.uniform(-1, 0, (n_points, 1))
-            x2_q = np.random.uniform(0, 1, (n_points, 1))
-        elif q == 2:  # Q3: x1 < 0, x2 < 0
-            x1_q = np.random.uniform(-1, 0, (n_points, 1))
-            x2_q = np.random.uniform(-1, 0, (n_points, 1))
-        else:  # Q4: x1 > 0, x2 < 0
-            x1_q = np.random.uniform(0, 1, (n_points, 1))
-            x2_q = np.random.uniform(-1, 0, (n_points, 1))
+        if gaussian:
+            if q == 0:  # Q1: x1 > 0 0, x2 > 0
+                x1_q, x2_q = np.random.multivariate_normal(
+                    mean=[0.5, 0.5], 
+                    cov=[[std, 0], [0, std]], 
+                    size=n_points
+                ).T
+            elif q == 1:  # Q2: x1 < 0, x2 > 0
+                x1_q, x2_q = np.random.multivariate_normal(
+                    mean=[-0.5, 0.5], 
+                    cov=[[std, 0], [0, std]], 
+                    size=n_points
+                ).T
+            elif q == 2:  # Q3: x1 < 0, x2 < 0
+                x1_q, x2_q = np.random.multivariate_normal(
+                    mean=[-0.5, -0.5], 
+                    cov=[[std, 0], [0, std]], 
+                    size=n_points
+                ).T
+            else:  # Q4: x1 > 0, x2 < 0
+                x1_q, x2_q = np.random.multivariate_normal(
+                    mean=[0.5, -0.5], 
+                    cov=[[std, 0], [0, std]], 
+                    size=n_points
+                ).T
+            x1_q = x1_q.reshape(-1, 1)
+            x2_q = x2_q.reshape(-1, 1)
+        else:
+            if q == 0:  # Q1: x1 > 0 0, x2 > 0
+                x1_q = np.random.uniform(0, 1, (n_points, 1))
+                x2_q = np.random.uniform(0, 1, (n_points, 1))
+            elif q == 1:  # Q2: x1 < 0, x2 > 0
+                x1_q = np.random.uniform(-1, 0, (n_points, 1))
+                x2_q = np.random.uniform(0, 1, (n_points, 1))
+            elif q == 2:  # Q3: x1 < 0, x2 < 0
+                x1_q = np.random.uniform(-1, 0, (n_points, 1))
+                x2_q = np.random.uniform(-1, 0, (n_points, 1))
+            else:  # Q4: x1 > 0, x2 < 0
+                x1_q = np.random.uniform(0, 1, (n_points, 1))
+                x2_q = np.random.uniform(-1, 0, (n_points, 1))
 
         x1.extend(x1_q)
         x2.extend(x2_q)
@@ -100,13 +131,13 @@ def sample_minibatch(data, batch_size):
     )
 
 def savefig(name, transparent=False, pdf=False):
-    FIG_ROOT = "figures"
-    os.makedirs(FIG_ROOT, exist_ok=True)
+    # FIG_ROOT = "figures"
+    # os.makedirs(FIG_ROOT, exist_ok=True)
     modes = ["png"]
     if pdf:
         modes += ["pdf"]
     for mode in modes:
-        file_name = f"{FIG_ROOT}/{name}.{mode}"
+        file_name = f"{name}.{mode}"
         if transparent:
             plt.savefig(file_name, dpi=300, bbox_inches="tight", transparent=True)
         else:

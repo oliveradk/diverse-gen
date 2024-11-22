@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -38,7 +38,8 @@ import sys
 from collections import defaultdict
 from typing import Optional, List
 from tqdm import tqdm
-
+from datetime import datetime
+    
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as t
@@ -51,6 +52,7 @@ from omegaconf import OmegaConf
 sys.path.insert(1, os.path.join(sys.path[0], ".."))
 from losses.divdis import DivDisLoss
 from losses.ace import ACELoss
+from losses.conf import ConfLoss
 from losses.dbat import DBatLoss
 from losses.loss_types import LossType
 
@@ -71,22 +73,27 @@ from dataclasses import dataclass
 @dataclass
 class Config():
     seed: int = 45
-    loss_type: LossType = LossType.PROB
+    loss_type: LossType = LossType.DIVDIS
     train_size: int = 500 
-    target_size: int = 5000
+    target_size: int = 500
     batch_size: int = 32 
-    target_batch_size: int = 100 
+    target_batch_size: int = 100
     train_iter: int = 10_000
-    heads: int = 2 
+    heads: int = 2
+    source_weight: float = 1.0
     aux_weight: float = 1.0
-    mix_rate: Optional[float] = 0.5
+    mix_rate: Optional[float] = 0.1
     l_01_mix_rate: Optional[float] = None # TODO: geneneralize
     l_10_mix_rate: Optional[float] = None
-    gamma: Optional[float] = 1.0
-    mix_rate_lower_bound: Optional[float] = 0.01
-    inbalance_ratio: Optional[bool] = True
+    gaussian: bool = True
+    std: float = 0.01
+    all_unlabeled: bool = False
+    mix_rate_lower_bound: Optional[float] = 0.5
+    inbalance_ratio: Optional[bool] = False
     lr: float = 1e-3
     make_gifs: bool = True
+    # dateime exp dir 
+    exp_name: str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 def post_init(conf: Config):
     if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
@@ -135,36 +142,32 @@ np.random.seed(conf.seed)
 # In[ ]:
 
 
-ex_data= generate_data(5000, mix_rate=0.1)
+ex_data= generate_data(5000, mix_rate=conf.mix_rate, gaussian=conf.gaussian, std=conf.std)
 plot_data(ex_data)
 
 
 # In[ ]:
 
 
-def get_exp_name(conf: Config):
-    mix_rate_str = f"mix_{conf.mix_rate}" if conf.mix_rate is not None else f"l01_{conf.l_01_mix_rate}_l10_{conf.l_10_mix_rate}"
-    mix_rate_str += f"_lb_{conf.mix_rate_lower_bound}"
-    gamma_str = f"_gamma_{conf.gamma}" if conf.gamma is not None else ""
-    return f"{conf.loss_type.value}_h{conf.heads}_w{conf.aux_weight}_{mix_rate_str}{gamma_str}_bal_{conf.inbalance_ratio}_tr_s{conf.train_size}_tar_s{conf.target_size}_b{conf.batch_size}_b_tar{conf.target_batch_size}_lr{conf.lr}_iter{conf.train_iter}"
+exp_dir = f"output/toy_2d/{conf.exp_name}"
+os.makedirs(exp_dir, exist_ok=True)
+temp_fig_dir = f"{exp_dir}/figures/temp"
+os.makedirs(temp_fig_dir, exist_ok=True)
 
 
-# In[ ]:
-
-
-exp_name = get_exp_name(conf)
-os.makedirs(f"figures/temp/{exp_name}", exist_ok=True)
+with open(f"{exp_dir}/config.yaml", "w") as f:
+    OmegaConf.save(conf, f)
 
 fig_save_times = sorted(
     [1, 2, 3, 4, 8, 16, 32, 64, 120, 128] + [50 * n for n in range(conf.train_iter // 50)]
-)
+) + [conf.train_iter-1]
 
-training_data = generate_data(conf.train_size, train=True)
-held_out_source_data = generate_data(conf.train_size, train=True) # used for infer only
+training_data = generate_data(conf.train_size, train=True, gaussian=conf.gaussian, std=conf.std)
+held_out_source_data = generate_data(conf.train_size, train=True, gaussian=conf.gaussian, std=conf.std) # used for infer only
 quad_proportions = [conf.l_01_mix_rate, (1-conf.mix_rate)/2, conf.l_10_mix_rate, (1-conf.mix_rate)/2]
-target_data = generate_data(conf.target_size, quadrant_proportions=quad_proportions)
-test_data = generate_data(conf.target_size // 2, mix_rate=0.5)
-test_data_alt = generate_data(conf.target_size // 2, mix_rate=0.5, swap_y_meaning=True)
+target_data = generate_data(conf.target_size, quadrant_proportions=quad_proportions, gaussian=conf.gaussian, std=conf.std)
+test_data = generate_data(conf.target_size // 2, mix_rate=0.5, gaussian=conf.gaussian, std=conf.std)
+test_data_alt = generate_data(conf.target_size // 2, mix_rate=0.5, swap_y_meaning=True, gaussian=conf.gaussian, std=conf.std)
 
 net = torch.nn.Sequential(
     torch.nn.Linear(2, 40), nn.ReLU(), nn.Linear(40, 40), nn.ReLU(), nn.Linear(40, conf.heads)
@@ -172,21 +175,23 @@ net = torch.nn.Sequential(
 opt = torch.optim.Adam(net.parameters())
 if conf.loss_type == LossType.DIVDIS:
     loss_fn = DivDisLoss(heads=conf.heads)
+elif conf.loss_type == LossType.CONF:
+    loss_fn = ConfLoss(p=0.5)
 else:
     loss_fn = ACELoss(
         heads=conf.heads, 
         mode=conf.loss_type.value, 
-        gamma=conf.gamma,
         inbalance_ratio=conf.inbalance_ratio,
         l_01_rate=conf.mix_rate_lower_bound / 2, 
         l_10_rate=conf.mix_rate_lower_bound / 2, 
+        all_unlabeled=conf.all_unlabeled,
     )
 
 
 # In[ ]:
 
 
-def plot_pred_grid(time=""):
+def plot_pred_grid(time="", plot_target=True):
     N = 20
     x = np.linspace(-1, 1, N)
     y = np.linspace(-1, 1, N)
@@ -195,18 +200,23 @@ def plot_pred_grid(time=""):
     with torch.no_grad():
         preds = net(inpt).reshape(N, N, conf.heads).sigmoid().cpu()
 
-    tr_x, tr_y = training_data
+    x, y = training_data
+    if plot_target:
+        tar_x, tar_y = target_data
+        x = np.concatenate([x, tar_x])
+        y = np.concatenate([y, tar_y])
+
     for i in range(conf.heads):
         plt.figure(figsize=(4, 4))
         plt.contourf(xv, yv, preds[:, :, i], cmap="RdBu", alpha=0.75)
         for g, c in [(0, "#E7040F"), (1, "#00449E")]:
-            tr_g = tr_x[tr_y.flatten() == g]
+            tr_g = x[y.flatten() == g]
             plt.scatter(tr_g[:, 0], tr_g[:, 1], zorder=10, s=10, c=c, edgecolors="k")
         plt.xlim(-1.0, 1.0)
         ax = plt.gca()
         ax.axes.xaxis.set_visible(False)
         ax.axes.yaxis.set_visible(False)
-        savefig(f"temp/{exp_name}/{time}_h{i}", transparent=True)
+        savefig(f"{temp_fig_dir}/{time}_h{i}", transparent=True)
 
 def plot_head_disagreement(time=""):
     N = 20
@@ -222,7 +232,7 @@ def plot_head_disagreement(time=""):
     ax = plt.gca()
     ax.axes.xaxis.set_visible(False)
     ax.axes.yaxis.set_visible(False)
-    savefig(f"temp/{exp_name}/{time}_disagreement", transparent=True)
+    savefig(f"{temp_fig_dir}/{time}_disagreement", transparent=True)
 
 
 # In[ ]:
@@ -241,7 +251,7 @@ for t in tqdm(range(conf.train_iter), desc="Training"):
 
     repulsion_loss_args = []
     repulsion_loss = loss_fn(target_logits, *repulsion_loss_args)
-    full_loss = xent + conf.aux_weight * repulsion_loss
+    full_loss = conf.source_weight * xent + conf.aux_weight * repulsion_loss
     opt.zero_grad()
     full_loss.backward()
     opt.step()
@@ -257,17 +267,22 @@ for t in tqdm(range(conf.train_iter), desc="Training"):
         corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
         acc_i = corrects_i.float().mean()
         metrics[f"acc_{i}"].append(acc_i.item())
+        if t % 10 == 0:
+            print(f"acc_{i}: {acc_i.item()}")
 
         corrects_i_alt = (test_logits_alt[:, i] > 0) == test_y_alt.flatten()
         acc_i_alt = corrects_i_alt.float().mean()
         metrics[f"acc_{i}_alt"].append(acc_i_alt.item())
+        if t % 10 == 0:
+            print(f"acc_{i}_alt: {acc_i_alt.item()}")
 
     metrics[f"xent"].append(xent.item())
     metrics[f"repulsion_loss"].append(repulsion_loss.item())
 
     if conf.make_gifs and t in fig_save_times:
         plot_pred_grid(t)
-        plot_head_disagreement(t)
+        if conf.heads == 2:
+            plot_head_disagreement(t)
         plt.close("all")
 
 
@@ -275,27 +290,28 @@ for t in tqdm(range(conf.train_iter), desc="Training"):
 
 
 # Train single ERM model (for comparison in learning curve)
-net = nn.Sequential(
-    nn.Linear(2, 40), nn.ReLU(), nn.Linear(40, 40), nn.ReLU(), nn.Linear(40, conf.heads)
-)
-opt = torch.optim.Adam(net.parameters())
+if conf.heads == 2:
+    net = nn.Sequential(
+        nn.Linear(2, 40), nn.ReLU(), nn.Linear(40, 40), nn.ReLU(), nn.Linear(40, conf.heads)
+    )
+    opt = torch.optim.Adam(net.parameters(), )
 
-for t in tqdm(range(conf.train_iter), desc="Training ERM"):
-    x, y = sample_minibatch(training_data, conf.batch_size)
-    logits = net(x)
-    logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
-    losses = [F.binary_cross_entropy_with_logits(logit, y) for logit in logits_chunked]
-    full_loss = sum(losses)
-    opt.zero_grad()
-    full_loss.backward()
-    opt.step()
+    for t in tqdm(range(conf.train_iter), desc="Training ERM"):
+        x, y = sample_minibatch(training_data, conf.batch_size)
+        logits = net(x)
+        logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
+        losses = [F.binary_cross_entropy_with_logits(logit, y) for logit in logits_chunked]
+        full_loss = sum(losses)
+        opt.zero_grad()
+        full_loss.backward()
+        opt.step()
 
-    test_x, test_y = sample_minibatch(test_data, conf.target_batch_size)
-    test_logits = net(test_x)
-    for i in range(conf.heads):
-        corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
-        acc_i = corrects_i.float().mean()
-        metrics[f"ERM_acc_{i}"].append(acc_i.item())
+        test_x, test_y = sample_minibatch(test_data, conf.target_batch_size)
+        test_logits = net(test_x)
+        for i in range(conf.heads):
+            corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
+            acc_i = corrects_i.float().mean()
+            metrics[f"ERM_acc_{i}"].append(acc_i.item())
 
 
 # In[ ]:
@@ -303,21 +319,20 @@ for t in tqdm(range(conf.train_iter), desc="Training ERM"):
 
 # save metrics 
 import json 
-os.makedirs("metrics", exist_ok=True)
-with open(f"metrics/{exp_name}.json", "w") as f:
+with open(f"{exp_dir}/metrics.json", "w") as f:
     json.dump(metrics, f, indent=4)
 
 
 # In[ ]:
 
 
-if conf.make_gifs:
+if conf.make_gifs and conf.heads == 2:
     # Draw learning curves
     def draw_full_curve(t=None, with_erm=False):
         fig, axs = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(8, 6))
         N = 10
         uniform = np.ones(N) / N
-        axs[0].set_xlim(-10, 1000)
+        axs[0].set_xlim(-10, conf.train_iter)
         axs[0].set_ylim(0.45, 1.05)
         smooth = lambda x: np.convolve(x, uniform, mode="valid")
         for i in [0, 1]:
@@ -340,16 +355,16 @@ if conf.make_gifs:
             for ax in axs:
                 ax.axvline(x=t, c="k")
 
-
-    draw_full_curve()
-    savefig(f"temp/{exp_name}/learning_curve_full")
+    if conf.heads == 1:
+        draw_full_curve()
+        savefig(f"{temp_fig_dir}/learning_curve_full")
 
     draw_full_curve(with_erm=True)
-    savefig(f"temp/{exp_name}/learning_curve_full_with_ERM")
+    savefig(f"{temp_fig_dir}/learning_curve_full_with_ERM")
 
     for t in tqdm(fig_save_times, desc="Drawing learning curves"):
         draw_full_curve(t=t)
-        savefig(f"temp/{exp_name}/learning_curve_full_{t}")
+        savefig(f"{temp_fig_dir}/learning_curve_full_{t}")
         plt.close("all")
 
     plt.figure(figsize=(8, 2))
@@ -368,7 +383,7 @@ if conf.make_gifs:
     ax.yaxis.set_tick_params(width=1.2)
     ax.spines["top"].set_color("none")
     ax.spines["right"].set_color("none")
-    savefig(f"temp/{exp_name}/learning_curve_with_ERM")
+    savefig(f"{temp_fig_dir}/learning_curve_with_ERM")
 
 
 # In[ ]:
@@ -380,26 +395,27 @@ if conf.make_gifs:
     os.makedirs("gifs", exist_ok=True)
     print("making gifs")
 
-    filenames = [f"figures/temp/{exp_name}/{t}_h0.png" for t in fig_save_times]
+    filenames = [f"{temp_fig_dir}/{t}_h0.png" for t in fig_save_times]
     images = [imageio.imread(filename) for filename in filenames]
-    gif_head_0_filename = f"gifs/{exp_name}_h0.gif"
+    gif_head_0_filename = f"{exp_dir}/h0.gif"
     imageio.mimsave(gif_head_0_filename, images)
 
-    filenames = [f"figures/temp/{exp_name}/{t}_h1.png" for t in fig_save_times]
-    images = [imageio.imread(filename) for filename in filenames]
-    gif_head_1_filename = f"gifs/{exp_name}_h1.gif"
-    imageio.mimsave(gif_head_1_filename, images)
+    if conf.heads == 2:
+        filenames = [f"{temp_fig_dir}/{t}_h1.png" for t in fig_save_times]
+        images = [imageio.imread(filename) for filename in filenames]
+        gif_head_1_filename = f"{exp_dir}/h1.gif"
+        imageio.mimsave(gif_head_1_filename, images)
 
-    filenames = [f"figures/temp/{exp_name}/{t}_disagreement.png" for t in fig_save_times]
+    filenames = [f"{temp_fig_dir}/{t}_disagreement.png" for t in fig_save_times]
     images = [imageio.imread(filename) for filename in filenames]
-    gif_disagreement_filename = f"gifs/{exp_name}_disagreement.gif"
+    gif_disagreement_filename = f"{exp_dir}/disagreement.gif"
     imageio.mimsave(gif_disagreement_filename, images)
 
     filenames = [
-        f"figures/temp/{exp_name}/learning_curve_full_{t}.png" for t in fig_save_times
+        f"{temp_fig_dir}/learning_curve_full_{t}.png" for t in fig_save_times
     ]
     images = [imageio.imread(filename) for filename in filenames]
-    gif_curve_filename = f"gifs/{exp_name}_curve.gif"
+    gif_curve_filename = f"{exp_dir}/curve.gif"
     imageio.mimsave(gif_curve_filename, images)
 
     print("GIF creation complete! Files are in:")
