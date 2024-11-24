@@ -45,7 +45,7 @@ def generate_data(
     quadrant_points = [int(num_datapoints * prop) for prop in quadrant_proportions]
     quadrant_points[-1] += num_datapoints - sum(quadrant_points)  # Adjust for rounding errors
 
-    x1, x2, y = [], [], []
+    x1, x2, y, g = [], [], [], []
 
     for q, n_points in enumerate(quadrant_points):
         if gaussian:
@@ -92,20 +92,55 @@ def generate_data(
         x1.extend(x1_q)
         x2.extend(x2_q)
         y.extend((x1_q < 0).astype(int))
+        g.extend(np.concatenate([(x1_q < 0).astype(int), (x2_q > 0).astype(int)], 1))
+        
 
     x1 = np.array(x1)
     x2 = np.array(x2)
-    y = np.array(y)
+    y = np.array(y).reshape(-1)
+    g = np.array(g)
 
     x = np.concatenate([x1, x2], 1)
     
     if swap_y_meaning:
         y = (x2 > 0).astype(int)
 
-    return x, y
+    return x, y, g
+
+def get_toy_grid_datasets(
+    source_mix_rate_0_1=0.0,
+    source_mix_rate_1_0=0.0,
+    target_mix_rate_0_1=0.5,
+    target_mix_rate_1_0=0.5,
+    gaussian=False,
+    std=0.1, 
+    source_size=500, 
+    target_size=500, 
+    val_size=250,
+    test_size=500
+):
+    source_non_mix_rate = 1 - source_mix_rate_0_1 - source_mix_rate_1_0
+    source_quadrant_proportions = [source_mix_rate_0_1, source_non_mix_rate / 2, source_mix_rate_1_0, source_non_mix_rate / 2]
+    target_non_mix_rate = 1 - target_mix_rate_0_1 - target_mix_rate_1_0
+    target_quadrant_proportions = [target_mix_rate_0_1, target_non_mix_rate / 2, target_mix_rate_1_0, target_non_mix_rate / 2]
+    
+    source_train = generate_data(num_datapoints=source_size, quadrant_proportions=source_quadrant_proportions, gaussian=gaussian, std=std)
+    source_val = generate_data(num_datapoints=val_size, quadrant_proportions=source_quadrant_proportions, gaussian=gaussian, std=std)
+    target_train = generate_data(num_datapoints=target_size, quadrant_proportions=target_quadrant_proportions, gaussian=gaussian, std=std)
+    target_val = generate_data(num_datapoints=val_size, quadrant_proportions=target_quadrant_proportions, gaussian=gaussian, std=std)
+    target_test = generate_data(num_datapoints=test_size, quadrant_proportions=[0.25, 0.25, 0.25, 0.25], gaussian=gaussian, std=std)
+    
+    # convert to tensor datasets 
+    source_train = t.utils.data.TensorDataset(*[t.tensor(x).to(t.float32) for x in source_train])
+    source_val = t.utils.data.TensorDataset(*[t.tensor(x).to(t.float32) for x in source_val])
+    target_train = t.utils.data.TensorDataset(*[t.tensor(x).to(t.float32) for x in target_train])
+    target_val = t.utils.data.TensorDataset(*[t.tensor(x).to(t.float32) for x in target_val])
+    target_test = t.utils.data.TensorDataset(*[t.tensor(x).to(t.float32) for x in target_test])
+    
+    return source_train, source_val, target_train, target_val, target_test
 
 def plot_data(data, title=""):
-    x, y = data
+    x, y, g = data
     
     plt.figure(figsize=(6, 6))
     
@@ -123,7 +158,7 @@ def plot_data(data, title=""):
 
 
 def sample_minibatch(data, batch_size):
-    x, y = data
+    x, y, g = data
     minibatch_idx = np.random.randint(0, x.shape[0], size=batch_size)
     return (
         t.tensor(x[minibatch_idx]).float(),

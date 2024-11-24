@@ -56,7 +56,7 @@ from losses.conf import ConfLoss
 from losses.dbat import DBatLoss
 from losses.loss_types import LossType
 
-from toy_data.grid import generate_data, plot_data, sample_minibatch, savefig
+from datasets.toy_grid import generate_data, plot_data, sample_minibatch, savefig
 
 
 # In[ ]:
@@ -200,9 +200,9 @@ def plot_pred_grid(time="", plot_target=True):
     with torch.no_grad():
         preds = net(inpt).reshape(N, N, conf.heads).sigmoid().cpu()
 
-    x, y = training_data
+    x, y, g = training_data
     if plot_target:
-        tar_x, tar_y = target_data
+        tar_x, tar_y, tar_g = target_data
         x = np.concatenate([x, tar_x])
         y = np.concatenate([y, tar_y])
 
@@ -243,7 +243,7 @@ for t in tqdm(range(conf.train_iter), desc="Training"):
     x, y = sample_minibatch(training_data, conf.batch_size)
     logits = net(x)
     logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
-    losses = [F.binary_cross_entropy_with_logits(logit, y) for logit in logits_chunked]
+    losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y) for logit in logits_chunked]
     xent = sum(losses)
 
     target_x, target_y = sample_minibatch(target_data, conf.target_batch_size)
@@ -297,7 +297,7 @@ if conf.heads == 2:
     opt = torch.optim.Adam(net.parameters(), )
 
     for t in tqdm(range(conf.train_iter), desc="Training ERM"):
-        x, y = sample_minibatch(training_data, conf.batch_size)
+        x, y, g = sample_minibatch(training_data, conf.batch_size)
         logits = net(x)
         logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
         losses = [F.binary_cross_entropy_with_logits(logit, y) for logit in logits_chunked]
@@ -306,7 +306,7 @@ if conf.heads == 2:
         full_loss.backward()
         opt.step()
 
-        test_x, test_y = sample_minibatch(test_data, conf.target_batch_size)
+        test_x, test_y, test_g = sample_minibatch(test_data, conf.target_batch_size)
         test_logits = net(test_x)
         for i in range(conf.heads):
             corrects_i = (test_logits[:, i] > 0) == test_y.flatten()
