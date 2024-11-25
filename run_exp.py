@@ -69,8 +69,15 @@ from models.lenet import LeNet
 from datasets.cifar_mnist import get_cifar_mnist_datasets
 from datasets.fmnist_mnist import get_fmnist_mnist_datasets
 from datasets.toy_grid import get_toy_grid_datasets
+from datasets.waterbirds import get_waterbirds_datasets
 
 from config import Config, post_init
+
+
+# In[ ]:
+
+
+RUN_PCA = False
 
 
 # In[ ]:
@@ -86,10 +93,10 @@ from config import Config, post_init
 
 conf = Config(
     seed=45,
-    dataset="cifar_mnist",
+    dataset="waterbirds",
     loss_type=LossType.TOPK,
     batch_size=32,
-    target_batch_size=128,
+    target_batch_size=32,
     epochs=10,
     heads=2,
     model="Resnet50",
@@ -211,6 +218,7 @@ else:
 # In[ ]:
 
 
+collate_fn = None
 if conf.dataset == "cifar_mnist":
     source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
         source_mix_rate_0_1=conf.source_l_01_mix_rate, 
@@ -229,6 +237,12 @@ elif conf.dataset == "fmnist_mnist":
         transform=model_transform, 
         pad_sides=pad_sides
     )
+elif conf.dataset == "waterbirds":
+    source_train, source_val, target_train, target_val, target_test = get_waterbirds_datasets(
+        mix_rate=conf.mix_rate, 
+        transform=model_transform, 
+    )
+    collate_fn = source_train.dataset.collate
 elif conf.dataset == "toy_grid":
     source_train, source_val, target_train, target_val, target_test = get_toy_grid_datasets(
         source_mix_rate_0_1=conf.source_l_01_mix_rate, 
@@ -243,10 +257,10 @@ else:
 # In[ ]:
 
 
-source_labels = [source_train[i][1:3] for i in range(len(source_train))]
-assert all([l[1][0] == l[1][1] for l in source_labels])
-target_labels = [target_train[i][1:3] for i in range(len(target_train))]
-np.mean([l[1][0] == l[1][1] for l in target_labels])
+# source_labels = [source_train[i][1:3] for i in range(len(source_train))]
+# assert all([l[1][0] == l[1][1] for l in source_labels])
+# target_labels = [target_train[i][1:3] for i in range(len(target_train))]
+# np.mean([l[1][0] == l[1][1] for l in target_labels])
 
 
 # In[ ]:
@@ -254,8 +268,15 @@ np.mean([l[1][0] == l[1][1] for l in target_labels])
 
 # plot image 
 img = source_train[0][0]
+# pad 
+# to PIL image 
+
+# img = transforms.ToPILImage()(img)
+# img
 if img.dim() == 3:
     plt.imshow(img.permute(1, 2, 0))
+    # show without axis 
+    plt.axis('off')
     plt.show()
 
 
@@ -274,11 +295,11 @@ if img.dim() == 3:
 
 
 # data loaders 
-source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True)
-source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True)
-target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True)
-target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True)
-target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True)
+source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn)
+source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn)
+target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn)
+target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn)
+target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn)
 
 # classifiers
 from transformers import get_cosine_schedule_with_warmup
@@ -357,16 +378,17 @@ def get_acts_and_labels(model: nn.Module, loader: DataLoader):
 
 
 # visualize data using first two principle componets of final layer activations
-model = model_builder()
-model = model.to(conf.device)
-activations, labels = get_acts_and_labels(model, target_test_loader)
+if is_notebook() and RUN_PCA:
+    model = model_builder()
+    model = model.to(conf.device)
+    activations, labels = get_acts_and_labels(model, target_test_loader)
 
 
 # In[ ]:
 
 
 from sklearn.decomposition import PCA
-if is_notebook():
+if is_notebook() and RUN_PCA:
     pca = PCA(n_components=2)
     pca.fit(activations)
     activations_pca = pca.transform(activations)
@@ -389,7 +411,7 @@ if is_notebook():
 # In[ ]:
 
 
-if is_notebook():
+if is_notebook() and RUN_PCA:
     group_labels = labels[:, 0] * 2 + labels[:, 1]
     plt.scatter(activations_pca[:, 0], activations_pca[:, 1], c=group_labels.to('cpu'), cmap="viridis")
     plt.title("Group labels")
@@ -400,7 +422,7 @@ if is_notebook():
 
 
 from sklearn.linear_model import LogisticRegression
-if is_notebook():
+if is_notebook() and RUN_PCA:
     component_range = [2**i for i in range(1, 9)]
     component_range = [i for i in component_range if i <= feature_dim]
     n_components_accs = []
@@ -422,7 +444,7 @@ if is_notebook():
 
 
 # fit linear probe 
-if is_notebook():
+if is_notebook() and RUN_PCA:
     from sklearn.linear_model import LogisticRegression
     lr = LogisticRegression(max_iter=10000)
     lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
@@ -434,7 +456,7 @@ if is_notebook():
 # In[ ]:
 
 
-if is_notebook():
+if is_notebook() and RUN_PCA:
     fig = plt.figure(figsize=(12, 5))
     # Second 3D plot for group labels
     ax3 = fig.add_subplot(121, projection='3d')
@@ -455,7 +477,7 @@ for epoch in range(conf.epochs):
         logits = net(x)
         logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
         # source loss 
-        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y) for logit in logits_chunked]
+        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.to(torch.float32)) for logit in logits_chunked]
         xent = sum(losses)
         # target loss 
         try: 
@@ -499,7 +521,7 @@ for epoch in range(conf.epochs):
                 x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
                 logits_val = net(x)
                 logits_chunked_val = torch.chunk(logits_val, conf.heads, dim=-1)
-                losses_val = [F.binary_cross_entropy_with_logits(logit.squeeze(), y) for logit in logits_chunked_val]
+                losses_val = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.to(torch.float32)) for logit in logits_chunked_val]
                 xent_val.append(sum(losses_val).item())
         metrics[f"source_val_xent"].append(np.mean(xent_val))
         metrics[f"val_loss"].append(np.mean(repulsion_losses_val) + np.mean(xent_val))
