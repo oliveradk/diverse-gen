@@ -61,6 +61,7 @@ from losses.divdis import DivDisLoss
 from losses.ace import ACELoss
 from losses.conf import ConfLoss
 from losses.dbat import DBatLoss
+from losses.smooth_top_loss import SmoothTopLoss
 from losses.loss_types import LossType
 
 from models.backbone import MultiHeadBackbone
@@ -89,12 +90,12 @@ from config import Config, post_init
 conf = Config(
     seed=45,
     dataset="cifar_mnist",
-    loss_type=LossType.TOPK,
-    batch_size=32,
-    target_batch_size=32,
-    epochs=10,
+    loss_type=LossType.EXP,
+    batch_size=25,
+    target_batch_size=25,
+    epochs=5,
     heads=2,
-    model="Resnet50",
+    model="ClipViT",
     shared_backbone=True,
     source_weight=1.0,
     aux_weight=1.0,
@@ -107,14 +108,14 @@ conf = Config(
     mix_rate_lower_bound=0.5,
     all_unlabeled=False,
     inbalance_ratio=False,
-    lr=1e-3,
+    lr=8e-6,
     weight_decay=1e-3,
     lr_scheduler=None,
     num_cycles=0.5,
     frac_warmup=0.05,
     device="cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),
     exp_dir=f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
-    plot_activations=True
+    plot_activations=False
 )
 
 
@@ -125,6 +126,17 @@ conf = Config(
 # conf.dataset = "toy_grid"
 # conf.model = "toy_model"
 # conf.epochs = 100
+
+
+# In[ ]:
+
+
+# CLipVIT Configs
+# conf.model = "ClipViT"
+# conf.batch_size = 25
+# conf.target_batch_size = 25
+# conf.epochs = 5
+# conf.lr = 8e-6
 
 
 # In[ ]:
@@ -324,6 +336,11 @@ if conf.loss_type == LossType.DIVDIS:
     loss_fn = DivDisLoss(heads=conf.heads)
 elif conf.loss_type == LossType.CONF:
     loss_fn = ConfLoss()
+elif conf.loss_type == LossType.SMOOTH:
+    loss_fn = SmoothTopLoss(
+        criterion=partial(F.binary_cross_entropy_with_logits, reduction='none'), 
+        device=conf.device
+    )
 elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
     loss_fn = ACELoss(
         heads=conf.heads, 

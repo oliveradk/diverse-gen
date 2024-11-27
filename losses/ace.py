@@ -77,7 +77,7 @@ class ACELoss(t.nn.Module):
         bs = logits.shape[0]
         if self.mode == 'exp':
             # apply exponential weight [e^-0, ..., e^N]
-            exp_weight = t.exp(-t.arange(loss_0_1.shape[0], device=self.device))
+            exp_weight = t.exp(-t.arange(bs, device=self.device))
             loss_0_1 = loss_0_1 * exp_weight
             loss_1_0 = loss_1_0 * exp_weight
             loss_0_0 = loss_0_0 * exp_weight

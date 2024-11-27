@@ -5,6 +5,7 @@ class LossType(Enum):
     EXP = 'exp'
     PROB = 'prob'
     TOPK = 'topk'
+    SMOOTH = 'smooth'
     CONF = 'conf'
     DIVDIS = 'divdis'
     DBAT = 'dbat'
