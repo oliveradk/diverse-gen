@@ -54,6 +54,7 @@ from PIL import Image
 import torchvision
 from torchvision import transforms
 from matplotlib.ticker import NullFormatter
+from sklearn.decomposition import PCA
 
 from losses.divdis import DivDisLoss 
 from losses.divdis import DivDisLoss
@@ -77,12 +78,6 @@ from config import Config, post_init
 # In[ ]:
 
 
-RUN_PCA = False
-
-
-# In[ ]:
-
-
 # TODO: add dbat 
 # TODO: add other vision datasets 
 # TODO: add language datasets 
@@ -93,7 +88,7 @@ RUN_PCA = False
 
 conf = Config(
     seed=45,
-    dataset="waterbirds",
+    dataset="cifar_mnist",
     loss_type=LossType.TOPK,
     batch_size=32,
     target_batch_size=32,
@@ -118,7 +113,8 @@ conf = Config(
     num_cycles=0.5,
     frac_warmup=0.05,
     device="cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),
-    exp_dir=f"output/dominos/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    exp_dir=f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+    plot_activations=True
 )
 
 
@@ -377,8 +373,34 @@ def get_acts_and_labels(model: nn.Module, loader: DataLoader):
 # In[ ]:
 
 
+def plot_activations(model: nn.Module, loader: DataLoader):
+    model.eval()
+    with torch.no_grad():
+        activations, labels = get_acts_and_labels(model, loader)
+    pca = PCA(n_components=2)
+    pca.fit(activations)
+    activations_pca = pca.transform(activations)
+
+    # Create a figure with two subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Plot first label
+    scatter1 = ax1.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 0].to('cpu'), cmap="viridis")
+    ax1.set_title('Label 0')
+
+    # Plot second label
+    scatter2 = ax2.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 1].to('cpu'), cmap="viridis")
+    ax2.set_title('Label 1')
+
+    fig.tight_layout()
+    return fig
+
+
+# In[ ]:
+
+
 # visualize data using first two principle componets of final layer activations
-if is_notebook() and RUN_PCA:
+if is_notebook() and conf.plot_activations:
     model = model_builder()
     model = model.to(conf.device)
     activations, labels = get_acts_and_labels(model, target_test_loader)
@@ -388,7 +410,7 @@ if is_notebook() and RUN_PCA:
 
 
 from sklearn.decomposition import PCA
-if is_notebook() and RUN_PCA:
+if is_notebook() and conf.plot_activations:
     pca = PCA(n_components=2)
     pca.fit(activations)
     activations_pca = pca.transform(activations)
@@ -405,13 +427,14 @@ if is_notebook() and RUN_PCA:
     ax2.set_title('Label 1')
 
     plt.tight_layout()
+    plt.savefig(f"{exp_dir}/activations_pretrain.png")
     plt.show()
 
 
 # In[ ]:
 
 
-if is_notebook() and RUN_PCA:
+if is_notebook() and conf.plot_activations:
     group_labels = labels[:, 0] * 2 + labels[:, 1]
     plt.scatter(activations_pca[:, 0], activations_pca[:, 1], c=group_labels.to('cpu'), cmap="viridis")
     plt.title("Group labels")
@@ -422,7 +445,7 @@ if is_notebook() and RUN_PCA:
 
 
 from sklearn.linear_model import LogisticRegression
-if is_notebook() and RUN_PCA:
+if is_notebook() and conf.plot_activations:
     component_range = [2**i for i in range(1, 9)]
     component_range = [i for i in component_range if i <= feature_dim]
     n_components_accs = []
@@ -444,7 +467,7 @@ if is_notebook() and RUN_PCA:
 
 
 # fit linear probe 
-if is_notebook() and RUN_PCA:
+if is_notebook() and conf.plot_activations:
     from sklearn.linear_model import LogisticRegression
     lr = LogisticRegression(max_iter=10000)
     lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
@@ -456,7 +479,7 @@ if is_notebook() and RUN_PCA:
 # In[ ]:
 
 
-if is_notebook() and RUN_PCA:
+if is_notebook() and conf.plot_activations:
     fig = plt.figure(figsize=(12, 5))
     # Second 3D plot for group labels
     ax3 = fig.add_subplot(121, projection='3d')
@@ -464,6 +487,14 @@ if is_notebook() and RUN_PCA:
                         c=group_labels.to('cpu'), cmap="viridis")
     ax3.view_init(25, 210, 0)
     ax3.set_title('Group labels')
+
+
+# In[ ]:
+
+
+if not is_notebook() and conf.plot_activations:
+    fig = plot_activations(net.backbone, target_test_loader)
+    fig.savefig(f"{exp_dir}/activations_pretrain.png")
 
 
 # In[ ]:
@@ -557,6 +588,12 @@ for epoch in range(conf.epochs):
         print(f"val weighted loss: {metrics[f'val_weighted_loss'][-1]:.4f}")
         for i in range(conf.heads):
             print(f"Head {i}: {metrics[f'epoch_acc_{i}'][-1]:.4f}, Alt: {metrics[f'epoch_acc_{i}_alt'][-1]:.4f}")
+        
+        # plot activations 
+        if conf.plot_activations:   
+            fig = plot_activations(net.backbone, target_test_loader)
+            fig.savefig(f"{exp_dir}/activations_{epoch}.png")
+            plt.close()
         
         net.train()
 

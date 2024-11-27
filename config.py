@@ -34,7 +34,7 @@ class Config():
     frac_warmup: float = 0.05
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-
+    plot_activations: bool = False
 
 def post_init(conf: Config, overrides: list[str]=[]):
     if conf.l_01_mix_rate is not None and conf.l_10_mix_rate is None:
