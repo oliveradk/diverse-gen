@@ -25,6 +25,8 @@ class Config():
     l_01_mix_rate: Optional[float] = None # TODO: geneneralize
     l_10_mix_rate: Optional[float] = None
     mix_rate_lower_bound: Optional[float] = 0.5
+    l_01_mix_rate_lower_bound: Optional[float] = None
+    l_10_mix_rate_lower_bound: Optional[float] = None
     all_unlabeled: bool = False
     inbalance_ratio: Optional[bool] = False
     lr: float = 1e-3
@@ -32,6 +34,7 @@ class Config():
     lr_scheduler: Optional[str] = None 
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
+    num_workers: int = 4
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     plot_activations: bool = False
@@ -58,6 +61,12 @@ def post_init(conf: Config, overrides: list[str]=[]):
     
     conf.source_l_01_mix_rate = conf.source_mix_rate / 2
     conf.source_l_10_mix_rate = conf.source_mix_rate / 2
+
+
     
     if conf.mix_rate_lower_bound is None:
         conf.mix_rate_lower_bound = conf.mix_rate
+
+    if conf.l_01_mix_rate_lower_bound is None and conf.l_10_mix_rate_lower_bound is None:
+        conf.l_01_mix_rate_lower_bound = conf.mix_rate_lower_bound / 2
+        conf.l_10_mix_rate_lower_bound = conf.mix_rate_lower_bound / 2

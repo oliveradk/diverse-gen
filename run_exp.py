@@ -90,10 +90,10 @@ from config import Config, post_init
 conf = Config(
     seed=45,
     dataset="cifar_mnist",
-    loss_type=LossType.EXP,
-    batch_size=25,
-    target_batch_size=25,
-    epochs=5,
+    loss_type=LossType.TOPK,
+    batch_size=32,
+    target_batch_size=32,
+    epochs=10,
     heads=2,
     model="ClipViT",
     shared_backbone=True,
@@ -106,13 +106,16 @@ conf = Config(
     l_01_mix_rate=None,
     l_10_mix_rate=None,
     mix_rate_lower_bound=0.5,
+    l_01_mix_rate_lower_bound=None, # 0.4
+    l_10_mix_rate_lower_bound=None, # 0.1
     all_unlabeled=False,
     inbalance_ratio=False,
-    lr=8e-6,
-    weight_decay=1e-3,
+    lr=1e-4, # 1e-3 maybe?
+    weight_decay=1e-4,
     lr_scheduler=None,
     num_cycles=0.5,
     frac_warmup=0.05,
+    num_workers=4,
     device="cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),
     exp_dir=f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     plot_activations=False
@@ -131,12 +134,18 @@ conf = Config(
 # In[ ]:
 
 
-# CLipVIT Configs
-# conf.model = "ClipViT"
-# conf.batch_size = 25
-# conf.target_batch_size = 25
-# conf.epochs = 5
-# conf.lr = 8e-6
+if conf.model == "ClipViT":
+    # conf.epochs = 5
+    conf.lr = 1e-5
+
+
+# In[ ]:
+
+
+# Resnet50 Configs
+if conf.model == "Resnet50":
+    conf.lr = 1e-4 # probably too high, should be 1e-4
+
 
 
 # In[ ]:
@@ -227,6 +236,7 @@ else:
 
 
 collate_fn = None
+alt_index = 1
 if conf.dataset == "cifar_mnist":
     source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
         source_mix_rate_0_1=conf.source_l_01_mix_rate, 
@@ -251,6 +261,7 @@ elif conf.dataset == "waterbirds":
         transform=model_transform, 
     )
     collate_fn = source_train.dataset.collate
+    alt_index = 0
 elif conf.dataset == "toy_grid":
     source_train, source_val, target_train, target_val, target_test = get_toy_grid_datasets(
         source_mix_rate_0_1=conf.source_l_01_mix_rate, 
@@ -303,11 +314,11 @@ if img.dim() == 3:
 
 
 # data loaders 
-source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn)
-source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn)
-target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn)
-target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn)
-target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn)
+source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
 
 # classifiers
 from transformers import get_cosine_schedule_with_warmup
@@ -346,8 +357,8 @@ elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
         heads=conf.heads, 
         mode=conf.loss_type.value, 
         inbalance_ratio=conf.inbalance_ratio,
-        l_01_rate=conf.mix_rate_lower_bound / 2, 
-        l_10_rate=conf.mix_rate_lower_bound / 2, 
+        l_01_rate=conf.l_01_mix_rate_lower_bound, 
+        l_10_rate=conf.l_10_mix_rate_lower_bound, 
         all_unlabeled=conf.all_unlabeled,
         device=conf.device
     )
@@ -363,8 +374,8 @@ def compute_accs(logits: torch.Tensor, gl: torch.Tensor):
         acc = torch.zeros(conf.heads)
         acc_alt = torch.zeros(conf.heads)
         for i in range(conf.heads):
-            acc[i] += ((logits[:, i] > 0) == gl[:, 0].flatten()).to(torch.float32).mean().item()
-            acc_alt[i] += ((logits[:, i] > 0) == gl[:, 1].flatten()).to(torch.float32).mean().item()
+            acc[i] += ((logits[:, i] > 0) == gl[:, 1-alt_index].flatten()).to(torch.float32).mean().item()
+            acc_alt[i] += ((logits[:, i] > 0) == gl[:, alt_index].flatten()).to(torch.float32).mean().item()
     return acc, acc_alt
 
 
@@ -590,7 +601,7 @@ for epoch in range(conf.epochs):
                 
                 for i in range(conf.heads):
                     total_correct[i] += ((test_logits[:, i] > 0) == test_y.flatten()).sum().item()
-                    total_correct_alt[i] += ((test_logits[:, i] > 0) == test_gl[:, 1].flatten()).sum().item()
+                    total_correct_alt[i] += ((test_logits[:, i] > 0) == test_gl[:, alt_index].flatten()).sum().item()
         
         for i in range(conf.heads):
             metrics[f"epoch_acc_{i}"].append((total_correct[i] / total_samples).item())
