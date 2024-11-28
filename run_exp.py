@@ -89,13 +89,13 @@ from config import Config, post_init
 
 conf = Config(
     seed=45,
-    dataset="cifar_mnist",
+    dataset="waterbirds",
     loss_type=LossType.TOPK,
-    batch_size=32,
-    target_batch_size=32,
+    batch_size=16,
+    target_batch_size=16,
     epochs=10,
     heads=2,
-    model="ClipViT",
+    model="Resnet50",
     shared_backbone=True,
     source_weight=1.0,
     aux_weight=1.0,
@@ -126,6 +126,7 @@ conf = Config(
 
 
 # # toy grid configs 
+# if conf.dataset == "toy_grid":
 # conf.dataset = "toy_grid"
 # conf.model = "toy_model"
 # conf.epochs = 100
@@ -292,7 +293,7 @@ img = source_train[0][0]
 
 # img = transforms.ToPILImage()(img)
 # img
-if img.dim() == 3:
+if img.dim() == 3 and is_notebook():
     plt.imshow(img.permute(1, 2, 0))
     # show without axis 
     plt.axis('off')
@@ -303,7 +304,7 @@ if img.dim() == 3:
 
 
 # plot target train images with vision_utils.make_grid
-if img.dim() == 3:
+if img.dim() == 3 and is_notebook():
     cifar_mnist_grid = torch.stack([target_train[i][0] for i in range(20)])
     grid_img = vision_utils.make_grid(cifar_mnist_grid, nrow=10, normalize=True, padding=1)
     plt.imshow(grid_img.permute(1, 2, 0))
