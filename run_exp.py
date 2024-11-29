@@ -89,10 +89,10 @@ from config import Config, post_init
 
 conf = Config(
     seed=45,
-    dataset="waterbirds",
+    dataset="cifar_mnist",
     loss_type=LossType.TOPK,
     batch_size=16,
-    target_batch_size=16,
+    target_batch_size=32,
     epochs=10,
     heads=2,
     model="Resnet50",
@@ -125,11 +125,10 @@ conf = Config(
 # In[ ]:
 
 
-# # toy grid configs 
+# # # toy grid configs 
 # if conf.dataset == "toy_grid":
-# conf.dataset = "toy_grid"
-# conf.model = "toy_model"
-# conf.epochs = 100
+#     conf.model = "toy_model"
+#     conf.epochs = 100
 
 
 # In[ ]:
@@ -281,6 +280,12 @@ else:
 # assert all([l[1][0] == l[1][1] for l in source_labels])
 # target_labels = [target_train[i][1:3] for i in range(len(target_train))]
 # np.mean([l[1][0] == l[1][1] for l in target_labels])
+
+
+# In[ ]:
+
+
+source_train[0]
 
 
 # In[ ]:
