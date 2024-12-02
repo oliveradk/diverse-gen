@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader, Dataset, random_split, TensorDataset
 
 from .dominos import gen_dominos_dataset, mnist_transform
 
+# TODO: make pill dataset, not tensor, apply transforms when loading (use dataloader workers to speed up)
+
 def get_cifar_mnist_datasets(
     vertical=True, 
     source_mix_rate_0_1=0.0,

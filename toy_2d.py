@@ -56,7 +56,7 @@ from losses.conf import ConfLoss
 from losses.dbat import DBatLoss
 from losses.loss_types import LossType
 
-from datasets.toy_grid import generate_data, plot_data, sample_minibatch, savefig
+from spurious_datasets.toy_grid import generate_data, plot_data, sample_minibatch, savefig
 
 
 # In[ ]:

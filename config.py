@@ -14,6 +14,7 @@ class Config():
     target_batch_size: int = 128
     epochs: int = 10
     heads: int = 2
+    binary: bool = False
     model: str = "Resnet18"
     shared_backbone: bool = True
     source_weight: float = 1.0
@@ -22,6 +23,7 @@ class Config():
     source_l_01_mix_rate: Optional[float] = None
     source_l_10_mix_rate: Optional[float] = None
     mix_rate: Optional[float] = 0.5
+    aggregate_mix_rate: bool = False
     l_01_mix_rate: Optional[float] = None # TODO: geneneralize
     l_10_mix_rate: Optional[float] = None
     mix_rate_lower_bound: Optional[float] = 0.5

@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "7" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -68,10 +68,10 @@ from models.backbone import MultiHeadBackbone
 from models.multi_model import MultiNetModel
 from models.lenet import LeNet
 
-from datasets.cifar_mnist import get_cifar_mnist_datasets
-from datasets.fmnist_mnist import get_fmnist_mnist_datasets
-from datasets.toy_grid import get_toy_grid_datasets
-from datasets.waterbirds import get_waterbirds_datasets
+from spurious_datasets.cifar_mnist import get_cifar_mnist_datasets
+from spurious_datasets.fmnist_mnist import get_fmnist_mnist_datasets
+from spurious_datasets.toy_grid import get_toy_grid_datasets
+from spurious_datasets.waterbirds import get_waterbirds_datasets
 
 from config import Config, post_init
 
@@ -95,6 +95,7 @@ conf = Config(
     target_batch_size=32,
     epochs=10,
     heads=2,
+    binary=True, # True
     model="Resnet50",
     shared_backbone=True,
     source_weight=1.0,
@@ -103,6 +104,7 @@ conf = Config(
     source_l_01_mix_rate=None,
     source_l_10_mix_rate=None,
     mix_rate=0.5,
+    aggregate_mix_rate=False,
     l_01_mix_rate=None,
     l_10_mix_rate=None,
     mix_rate_lower_bound=0.5,
@@ -237,6 +239,7 @@ else:
 
 collate_fn = None
 alt_index = 1
+classes = 2
 if conf.dataset == "cifar_mnist":
     source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
         source_mix_rate_0_1=conf.source_l_01_mix_rate, 
@@ -272,20 +275,9 @@ elif conf.dataset == "toy_grid":
 else:
     raise ValueError(f"Dataset {conf.dataset} not supported")
 
+# if classes == 2 and conf.binary:
+#     classes = 1
 
-# In[ ]:
-
-
-# source_labels = [source_train[i][1:3] for i in range(len(source_train))]
-# assert all([l[1][0] == l[1][1] for l in source_labels])
-# target_labels = [target_train[i][1:3] for i in range(len(target_train))]
-# np.mean([l[1][0] == l[1][1] for l in target_labels])
-
-
-# In[ ]:
-
-
-source_train[0]
 
 
 # In[ ]:
@@ -329,8 +321,9 @@ target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle
 # classifiers
 from transformers import get_cosine_schedule_with_warmup
 if conf.shared_backbone:
-    net = MultiHeadBackbone(model_builder(), conf.heads, feature_dim)
+    net = MultiHeadBackbone(model_builder(), conf.heads, feature_dim, classes if not conf.binary else 1)
 else:
+    print("warning, not using shared backbone untested")
     net = MultiNetModel(heads=conf.heads, model_builder=model_builder)
 net = net.to(conf.device)
 
@@ -359,12 +352,20 @@ elif conf.loss_type == LossType.SMOOTH:
         device=conf.device
     )
 elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
+    if conf.aggregate_mix_rate:
+        mix_rate = conf.mix_rate_lower_bound 
+        group_mix_rates = None
+    else:
+        mix_rate = None 
+        group_mix_rates = {(0, 1): conf.l_01_mix_rate_lower_bound, (1, 0): conf.l_10_mix_rate_lower_bound}
     loss_fn = ACELoss(
         heads=conf.heads, 
+        classes=classes,
+        binary=conf.binary,
         mode=conf.loss_type.value, 
         inbalance_ratio=conf.inbalance_ratio,
-        l_01_rate=conf.l_01_mix_rate_lower_bound, 
-        l_10_rate=conf.l_10_mix_rate_lower_bound, 
+        mix_rate=mix_rate,
+        group_mix_rates=group_mix_rates,
         all_unlabeled=conf.all_unlabeled,
         device=conf.device
     )
@@ -534,15 +535,34 @@ if not is_notebook() and conf.plot_activations:
 # In[ ]:
 
 
+def compute_src_losses(logits, y, binary):
+    logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
+    if binary:
+        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.to(torch.float32)) for logit in logits_chunked]
+    else:
+        losses = [F.cross_entropy(logit.squeeze(), y.to(torch.long)) for logit in logits_chunked]
+    return losses
+
+def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: bool):
+    if binary:
+        return ((logits[:, head] > 0) == y.flatten()).sum().item()
+    else:
+        logits = logits.view(logits.size(0), conf.heads, -1)
+        return (logits[:, head].argmax(dim=-1) == y).sum().item()
+        
+
+
+# In[ ]:
+
+
 metrics = defaultdict(list)
 target_iter = iter(target_train_loader)
 for epoch in range(conf.epochs):
     for batch_idx, (x, y, gl) in tqdm(enumerate(source_train_loader), desc="Source train", total=len(source_train_loader)):
         x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
+        # source loss
         logits = net(x)
-        logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
-        # source loss 
-        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.to(torch.float32)) for logit in logits_chunked]
+        losses = compute_src_losses(logits, y, conf.binary)
         xent = sum(losses)
         # target loss 
         try: 
@@ -585,8 +605,7 @@ for epoch in range(conf.epochs):
             for x, y, gl in tqdm(source_val_loader, desc="Source val"):
                 x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
                 logits_val = net(x)
-                logits_chunked_val = torch.chunk(logits_val, conf.heads, dim=-1)
-                losses_val = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.to(torch.float32)) for logit in logits_chunked_val]
+                losses_val = compute_src_losses(logits_val, y, conf.binary)
                 xent_val.append(sum(losses_val).item())
         metrics[f"source_val_xent"].append(np.mean(xent_val))
         metrics[f"val_loss"].append(np.mean(repulsion_losses_val) + np.mean(xent_val))
@@ -600,14 +619,13 @@ for epoch in range(conf.epochs):
         with torch.no_grad():
             for test_x, test_y, test_gl in target_test_loader:
                 test_x, test_y, test_gl = test_x.to(conf.device), test_y.to(conf.device), test_gl.to(conf.device)
-                # test_logits = net(test_x).squeeze() #
                 test_logits = net(test_x)
-                assert test_logits.shape == (test_x.size(0), conf.heads)
+                assert test_logits.shape == (test_x.size(0), conf.heads * (1 if conf.binary else classes))
                 total_samples += test_y.size(0)
                 
                 for i in range(conf.heads):
-                    total_correct[i] += ((test_logits[:, i] > 0) == test_y.flatten()).sum().item()
-                    total_correct_alt[i] += ((test_logits[:, i] > 0) == test_gl[:, alt_index].flatten()).sum().item()
+                    total_correct[i] += compute_corrects(test_logits, i, test_y, conf.binary)
+                    total_correct_alt[i] += compute_corrects(test_logits, i, test_gl[:, alt_index], conf.binary)
         
         for i in range(conf.heads):
             metrics[f"epoch_acc_{i}"].append((total_correct[i] / total_samples).item())

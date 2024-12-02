@@ -1,24 +1,62 @@
 import torch as t 
 from typing import Literal, Optional
+from itertools import product
 
 from scipy.stats import binom
 
-def compute_head_losses(logits: t.Tensor):
-    criterion = t.nn.functional.binary_cross_entropy_with_logits
-    head_0_0 = criterion(
-        logits[:, 0], t.zeros_like(logits[:, 0]), reduction='none'
-    )
-    head_0_1 = criterion(
-        logits[:, 0], t.ones_like(logits[:, 0]), reduction='none'
-    )
-    head_1_0 = criterion(
-        logits[:, 1], t.zeros_like(logits[:, 1]), reduction='none'
-    )
-    head_1_1 = criterion(
-        logits[:, 1], t.ones_like(logits[:, 1]), reduction='none'
-    )
-    return head_0_0, head_0_1, head_1_0, head_1_1
+def compute_head_losses(
+        logits: t.Tensor, heads: int, classes: int, binary: bool = False
+):
+    # all paris of heads and labels 
+    # if heads=2, classes=3, then 
+    # [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)]
+    head_label_groups = list(product(range(heads), range(classes)))
+    device = logits.device
 
+    # define the criterion and label shape based on whether heads are binary or not
+    if binary: 
+        assert classes == 2
+        criterion = t.nn.functional.binary_cross_entropy_with_logits
+        label_shape = logits[:, 0].shape
+        dtype = logits.dtype
+    else:
+        criterion = t.nn.functional.cross_entropy
+        label_shape = (logits.shape[0],)
+        dtype = t.long
+
+    # compute the loss for each head-label pair
+    lossses = {}
+    for (head, label) in head_label_groups:
+        lossses[(head, label)] = criterion(
+            logits[:, head], t.ones(label_shape, dtype=dtype, device=device) * label, reduction='none'
+        )
+    return lossses
+
+def compute_group_losses(
+        head_losses: dict[tuple[int, int], t.Tensor], heads: int, classes: int
+):
+    # get all groups of heads and labels
+    # e.g. if heads=2, classes=3, then groups are 
+    # [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)]
+    groups = list(product(range(classes), repeat=heads))
+    group_losses = {}
+    for group in groups:
+        group_losses[group] = sum(head_losses[head, label] for head, label in enumerate(group))
+    return group_losses
+
+def compute_loss(losses: t.Tensor, mix_rate: float, mode: Literal['exp', 'prob', 'topk']):
+    assert losses.ndim == 1
+    bs = losses.shape[0]
+    if mode == 'exp':
+        exp_weight = t.exp(-t.arange(bs, device=losses.device))
+        loss = (losses * exp_weight).mean()
+    elif mode == 'prob':
+        prob_weight = t.tensor([binom.pmf(i, bs, mix_rate) / i for i in range(bs)])
+        loss = (losses * prob_weight).sum()
+    elif mode == 'topk':
+        k = round(bs * mix_rate)
+        loss = t.topk(losses, k=k, largest=False).values.mean()
+    return loss
 
 class ACELoss(t.nn.Module):
 
@@ -26,111 +64,65 @@ class ACELoss(t.nn.Module):
     def __init__(
         self, 
         heads=2,
+        classes=2,
+        binary: bool = False,
         mode: Literal['exp', 'prob', 'topk'] = 'exp',
         inbalance_ratio: bool = False,
         normalize_prob: bool = True,
-        l_01_rate: Optional[float]=0.25, 
-        l_10_rate: Optional[float]=0.25, 
-        l_00_rate: Optional[float]=None,
-        l_11_rate: Optional[float]=None,
+        mix_rate: Optional[float] = 0.5,
+        group_mix_rates: Optional[dict[tuple[int, ...], float]] = None,
         all_unlabeled: bool = False,
         device: str = "cpu"
     ):
         super().__init__()
         assert heads == 2
         self.heads = heads # assume 2 heads for now
+        self.classes = classes
+        self.binary = binary
         self.mode = mode
         self.inbalance_ratio = inbalance_ratio 
         self.normalize_prob = normalize_prob
-        self.l_01_rate = l_01_rate
-        self.l_10_rate = l_10_rate
-        if l_00_rate is None and l_11_rate is None:
-            iid_rate = 1 - l_01_rate - l_10_rate
-            l_00_rate = l_11_rate = iid_rate / 2
-        self.l_00_rate = l_00_rate
-        self.l_11_rate = l_11_rate
+        self.mix_rate = mix_rate
+        self.group_mix_rates = group_mix_rates
         self.all_unlabeled = all_unlabeled
         self.device = device
+
+        # TODO: weighting
 
     
     def forward(self, logits):
         """
         Args:
-            logits (torch.Tensor): Input logits with shape [BATCH_SIZE, HEADS].
+            logits (torch.Tensor): Input logits with shape [BATCH_SIZE, HEADS * CLASSES].
+            (or [BATCH_SIZE, HEADS] if binary)
         """
-        # L_{0,1} = -log(1-p_1) -log(p_2)
-        # L_{1,0} = -log(p_1) - log(1-p_2)
-        # L_{1, 0} + L_{0, 1} = -log((1-p_1) * p_2) + -log((1-p_2) * p_1)
-        # focal weight (0, 1) = (1 - (1-p_1) * p_2) ^ gamma
-
-        # I guess easier to just seperate them 
-        head_0_0, head_0_1, head_1_0, head_1_1 = compute_head_losses(logits)
-        loss_0_1 = head_0_0 + head_1_1
-        loss_1_0 = head_0_1 + head_1_0 
-        loss_0_0 = head_0_0 + head_1_0
-        loss_1_1 = head_0_1 + head_1_1
-        # sort losses in ascending order
-        loss_0_1, _ = loss_0_1.sort()
-        loss_1_0, _ = loss_1_0.sort()
-        loss_0_0, _ = loss_0_0.sort()
-        loss_1_1, _ = loss_1_1.sort()
+        assert logits.shape[1] == self.heads * self.classes if not self.binary else self.heads
         bs = logits.shape[0]
-        if self.mode == 'exp':
-            # apply exponential weight [e^-0, ..., e^N]
-            exp_weight = t.exp(-t.arange(bs, device=self.device))
-            loss_0_1 = loss_0_1 * exp_weight
-            loss_1_0 = loss_1_0 * exp_weight
-            loss_0_0 = loss_0_0 * exp_weight
-            loss_1_1 = loss_1_1 * exp_weight
-            losses = [loss_0_1, loss_1_0]
-            if self.all_unlabeled:
-                losses.extend([loss_0_0, loss_1_1])
-            loss = t.stack(losses).mean()
-            return loss
-        elif self.mode == 'prob':
-            weights_01 = t.zeros(bs, device=self.device)
-            weights_10 = t.zeros(bs, device=self.device)
-            weights_00 = t.zeros(bs, device=self.device)
-            weights_11 = t.zeros(bs, device=self.device)
-            for i in range(1, bs+1):
-                weight_update_01 = binom.pmf(i, bs, self.l_01_rate) / i
-                weight_update_10 = binom.pmf(i, bs, self.l_10_rate) / i
-                weight_update_00 = binom.pmf(i, bs, self.l_00_rate) / i
-                weight_update_11 = binom.pmf(i, bs, self.l_11_rate) / i
-                if self.inbalance_ratio:
-                    weight_update_01 *= bs / i
-                    weight_update_10 *= bs / i
-                    weight_update_00 *= bs / i
-                    weight_update_11 *= bs / i
-                weights_01[:i] += weight_update_01
-                weights_10[:i] += weight_update_10
-                weights_00[:i] += weight_update_00
-                weights_11[:i] += weight_update_11
-            if self.normalize_prob:
-                weights_01 *= 1 / (1 - binom.pmf(0, bs, self.l_01_rate))
-                weights_10 *= 1 / (1 - binom.pmf(0, bs, self.l_10_rate))
-                weights_00 *= 1 / (1 - binom.pmf(0, bs, self.l_00_rate))
-                weights_11 *= 1 / (1 - binom.pmf(0, bs, self.l_11_rate))
-            loss_0_1 = loss_0_1 * weights_01
-            loss_1_0 = loss_1_0 * weights_10
-            loss_0_0 = loss_0_0 * weights_00
-            loss_1_1 = loss_1_1 * weights_11
-            loss = loss_0_1 + loss_1_0
-            if self.all_unlabeled:
-                loss += loss_0_0 + loss_1_1
-            return loss
-        elif self.mode == 'topk':
-            n_0_1 = round(bs * self.l_01_rate)
-            n_1_0 = round(bs * self.l_10_rate)
-            n_0_0 = round(bs * self.l_00_rate)
-            n_1_1 = round(bs * self.l_11_rate)
-            loss_0_1 = loss_0_1[:n_0_1].mean()
-            loss_1_0 = loss_1_0[:n_1_0].mean()
-            loss_0_0 = loss_0_0[:n_0_0].mean()
-            loss_1_1 = loss_1_1[:n_1_1].mean()
-            loss = loss_0_1 + loss_1_0
-            if self.all_unlabeled:
-                loss += loss_0_0 + loss_1_1
-            return loss
 
 
+        # reshape logits to [BATCH_SIZE, HEADS, CLASSES] if not binary
+        if not self.binary:
+            logits = logits.view(bs, self.heads, self.classes)
+        
+        # compute losses for each head and each label (n_heads * n_classes)
+        head_losses = compute_head_losses(logits, self.heads, self.classes, self.binary)
+        # compute losses for each group (a set of labels for each head)
+        group_losses = compute_group_losses(head_losses, self.heads, self.classes)
+        # remove agreeing groups
+        if not self.all_unlabeled: 
+            group_losses = {group: loss for group, loss in group_losses.items() if len(set(group)) > 1}
+       
+        # min over the group index (so each instance only gets one pseudo-label)
+        if self.mix_rate is not None:
+            group_losses_stacked = t.stack(list(group_losses.values()), dim=0)
+            assert group_losses_stacked.shape == (len(group_losses), logits.shape[0])
+            losses = group_losses_stacked.min(dim=0).values
+
+            loss = compute_loss(losses, self.mix_rate, self.mode)
+        # compute loss per group
+        else: 
+            loss = 0 
+            for group, group_mix_rate in self.group_mix_rates.items():
+                losses = group_losses[group]
+                loss += compute_loss(losses, group_mix_rate, self.mode)
+        return loss
