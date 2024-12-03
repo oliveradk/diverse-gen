@@ -68,7 +68,6 @@ class ACELoss(t.nn.Module):
         binary: bool = False,
         mode: Literal['exp', 'prob', 'topk'] = 'exp',
         inbalance_ratio: bool = False,
-        normalize_prob: bool = True,
         mix_rate: Optional[float] = 0.5,
         group_mix_rates: Optional[dict[tuple[int, ...], float]] = None,
         all_unlabeled: bool = False,
@@ -81,14 +80,10 @@ class ACELoss(t.nn.Module):
         self.binary = binary
         self.mode = mode
         self.inbalance_ratio = inbalance_ratio 
-        self.normalize_prob = normalize_prob
         self.mix_rate = mix_rate
         self.group_mix_rates = group_mix_rates
         self.all_unlabeled = all_unlabeled
         self.device = device
-
-        # TODO: weighting
-
     
     def forward(self, logits):
         """
@@ -124,5 +119,6 @@ class ACELoss(t.nn.Module):
             loss = 0 
             for group, group_mix_rate in self.group_mix_rates.items():
                 losses = group_losses[group]
+                # TODO: ensure one pseudo-label per instance?
                 loss += compute_loss(losses, group_mix_rate, self.mode)
         return loss
