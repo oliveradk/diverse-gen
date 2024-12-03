@@ -36,6 +36,7 @@ class Config():
     lr_scheduler: Optional[str] = None 
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
+    max_length: int = 128
     num_workers: int = 4
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"

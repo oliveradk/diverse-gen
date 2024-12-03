@@ -72,7 +72,7 @@ from spurious_datasets.cifar_mnist import get_cifar_mnist_datasets
 from spurious_datasets.fmnist_mnist import get_fmnist_mnist_datasets
 from spurious_datasets.toy_grid import get_toy_grid_datasets
 from spurious_datasets.waterbirds import get_waterbirds_datasets
-
+from spurious_datasets.multi_nli import get_multi_nli_datasets
 from config import Config, post_init
 
 
@@ -89,14 +89,14 @@ from config import Config, post_init
 
 conf = Config(
     seed=45,
-    dataset="cifar_mnist",
+    dataset="multi_nli",
     loss_type=LossType.TOPK,
-    batch_size=16,
-    target_batch_size=32,
+    batch_size=32,
+    target_batch_size=64,
     epochs=10,
     heads=2,
     binary=True, # True
-    model="Resnet50",
+    model="bert",
     shared_backbone=True,
     source_weight=1.0,
     aux_weight=1.0,
@@ -104,7 +104,7 @@ conf = Config(
     source_l_01_mix_rate=None,
     source_l_10_mix_rate=None,
     mix_rate=0.5,
-    aggregate_mix_rate=False,
+    aggregate_mix_rate=True,#TODO: True
     l_01_mix_rate=None,
     l_10_mix_rate=None,
     mix_rate_lower_bound=0.5,
@@ -112,12 +112,13 @@ conf = Config(
     l_10_mix_rate_lower_bound=None, # 0.1
     all_unlabeled=False,
     inbalance_ratio=False,
-    lr=1e-4, # 1e-3 maybe?
+    lr=2e-5, # 1e-3 maybe?
     weight_decay=1e-4,
-    lr_scheduler=None,
+    lr_scheduler="cosine",
     num_cycles=0.5,
     frac_warmup=0.05,
-    num_workers=4,
+    max_length=256,
+    num_workers=6,
     device="cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),
     exp_dir=f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     plot_activations=False
@@ -189,6 +190,7 @@ np.random.seed(conf.seed)
 
 model_transform = None
 pad_sides = False
+tokenizer = None
 if conf.model == "Resnet50":
     from torchvision import models
     from torchvision.models.resnet import ResNet50_Weights
@@ -220,6 +222,14 @@ elif conf.model == "ClipViT":
     ])
     feature_dim = 512
     pad_sides = True
+elif conf.model == "bert":
+    from transformers import BertModel, BertTokenizer
+    from models.hf_wrapper import HFWrapper
+    backbone = BertModel.from_pretrained('bert-base-uncased')
+    backbone = HFWrapper(backbone)
+    model_builder = lambda: backbone
+    feature_dim = 768
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 elif conf.model == "toy_model":
     model_builder = lambda: nn.Sequential(
         nn.Linear(2, 40), nn.ReLU(), nn.Linear(40, 40), nn.ReLU()
@@ -240,7 +250,16 @@ else:
 collate_fn = None
 alt_index = 1
 classes = 2
-if conf.dataset == "cifar_mnist":
+is_img = True
+
+if conf.dataset == "toy_grid":
+    source_train, source_val, target_train, target_val, target_test = get_toy_grid_datasets(
+        source_mix_rate_0_1=conf.source_l_01_mix_rate, 
+        source_mix_rate_1_0=conf.source_l_10_mix_rate, 
+        target_mix_rate_0_1=conf.l_01_mix_rate, 
+        target_mix_rate_1_0=conf.l_10_mix_rate, 
+    )
+elif conf.dataset == "cifar_mnist":
     source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
         source_mix_rate_0_1=conf.source_l_01_mix_rate, 
         source_mix_rate_1_0=conf.source_l_10_mix_rate, 
@@ -249,6 +268,7 @@ if conf.dataset == "cifar_mnist":
         transform=model_transform, 
         pad_sides=pad_sides
     )
+
 elif conf.dataset == "fmnist_mnist":
     source_train, source_val, target_train, target_val, target_test = get_fmnist_mnist_datasets(
         source_mix_rate_0_1=conf.source_l_01_mix_rate, 
@@ -265,13 +285,15 @@ elif conf.dataset == "waterbirds":
     )
     collate_fn = source_train.dataset.collate
     alt_index = 0
-elif conf.dataset == "toy_grid":
-    source_train, source_val, target_train, target_val, target_test = get_toy_grid_datasets(
-        source_mix_rate_0_1=conf.source_l_01_mix_rate, 
-        source_mix_rate_1_0=conf.source_l_10_mix_rate, 
-        target_mix_rate_0_1=conf.l_01_mix_rate, 
-        target_mix_rate_1_0=conf.l_10_mix_rate, 
+elif conf.dataset == "multi_nli":
+    source_train, source_val, target_train, target_val, target_test = get_multi_nli_datasets(
+        mix_rate=conf.mix_rate,
+        tokenizer=tokenizer,
+        max_length=conf.max_length, 
+        dataset_length=None
     )
+    is_img = False
+
 else:
     raise ValueError(f"Dataset {conf.dataset} not supported")
 
@@ -290,7 +312,7 @@ img = source_train[0][0]
 
 # img = transforms.ToPILImage()(img)
 # img
-if img.dim() == 3 and is_notebook():
+if is_img and img.dim() == 3 and is_notebook():
     plt.imshow(img.permute(1, 2, 0))
     # show without axis 
     plt.axis('off')
@@ -301,7 +323,7 @@ if img.dim() == 3 and is_notebook():
 
 
 # plot target train images with vision_utils.make_grid
-if img.dim() == 3 and is_notebook():
+if is_img and img.dim() == 3 and is_notebook():
     cifar_mnist_grid = torch.stack([target_train[i][0] for i in range(20)])
     grid_img = vision_utils.make_grid(cifar_mnist_grid, nrow=10, normalize=True, padding=1)
     plt.imshow(grid_img.permute(1, 2, 0))
@@ -555,11 +577,17 @@ def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: b
 # In[ ]:
 
 
+from utils.utils import to_device, batch_size
+
+
+# In[ ]:
+
+
 metrics = defaultdict(list)
 target_iter = iter(target_train_loader)
 for epoch in range(conf.epochs):
     for batch_idx, (x, y, gl) in tqdm(enumerate(source_train_loader), desc="Source train", total=len(source_train_loader)):
-        x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
+        x, y, gl = to_device(x, y, gl, conf.device)
         # source loss
         logits = net(x)
         losses = compute_src_losses(logits, y, conf.binary)
@@ -570,7 +598,7 @@ for epoch in range(conf.epochs):
         except StopIteration:
             target_iter = iter(target_train_loader)
             target_x, target_y, target_gl = next(target_iter)
-        target_x, target_y, target_gl = target_x.to(conf.device), target_y.to(conf.device), target_gl.to(conf.device)
+        target_x, target_y, target_gl = to_device(target_x, target_y, target_gl, conf.device)
         target_logits = net(target_x)
         repulsion_loss = loss_fn(target_logits)
         # full loss 
@@ -592,7 +620,7 @@ for epoch in range(conf.epochs):
         weighted_repulsion_losses_val = []
         with torch.no_grad():
             for x, y, gl in tqdm(target_val_loader, desc="Target val"):
-                x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
+                x, y, gl = to_device(x, y, gl, conf.device)
                 logits_val = net(x)
                 repulsion_loss_val = loss_fn(logits_val)
                 repulsion_losses_val.append(repulsion_loss_val.item())
@@ -603,7 +631,7 @@ for epoch in range(conf.epochs):
         xent_val = []
         with torch.no_grad():
             for x, y, gl in tqdm(source_val_loader, desc="Source val"):
-                x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
+                x, y, gl = to_device(x, y, gl, conf.device)
                 logits_val = net(x)
                 losses_val = compute_src_losses(logits_val, y, conf.binary)
                 xent_val.append(sum(losses_val).item())
@@ -618,9 +646,9 @@ for epoch in range(conf.epochs):
         
         with torch.no_grad():
             for test_x, test_y, test_gl in target_test_loader:
-                test_x, test_y, test_gl = test_x.to(conf.device), test_y.to(conf.device), test_gl.to(conf.device)
+                test_x, test_y, test_gl = to_device(test_x, test_y, test_gl, conf.device)
                 test_logits = net(test_x)
-                assert test_logits.shape == (test_x.size(0), conf.heads * (1 if conf.binary else classes))
+                assert test_logits.shape == (batch_size(test_x), conf.heads * (1 if conf.binary else classes))
                 total_samples += test_y.size(0)
                 
                 for i in range(conf.heads):

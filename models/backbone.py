@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from utils.utils import batch_size
+
 class MultiHeadBackbone(nn.Module):
     def __init__(self, backbone, n_heads, feature_dim, classes):
         super(MultiHeadBackbone, self).__init__()
@@ -13,14 +15,14 @@ class MultiHeadBackbone(nn.Module):
     
     def forward(self, x):
         # Get features from the shared backbone
-        features = self.backbone(x).view(x.size(0), -1)
+        bs = batch_size(x)
+        features = self.backbone(x).view(bs, -1)
         
         # Apply the heads to the features
         outputs = self.heads(features)
         
         # Reshape the output to separate the heads
-        batch_size = features.size(0)
-        outputs = outputs.view(batch_size, self.n_heads * self.classes)
+        outputs = outputs.view(bs, self.n_heads * self.classes)
         
         return outputs
 
