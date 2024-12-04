@@ -22,6 +22,7 @@ ipykernel = "^6.29.5"
 clip = {git = "https://github.com/openai/CLIP.git"}
 scikit-learn = "^1.5.2"
 wilds = "^2.0.0"
+ipdb = "^0.13.13"
 
 
 [build-system]
