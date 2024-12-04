@@ -38,6 +38,8 @@ class Config():
     frac_warmup: float = 0.05
     max_length: int = 128
     num_workers: int = 4
+    freeze_heads: bool = True
+    head_1_epochs: int = 5
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     plot_activations: bool = False

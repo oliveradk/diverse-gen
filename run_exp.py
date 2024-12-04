@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "6" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -65,7 +65,7 @@ from losses.smooth_top_loss import SmoothTopLoss
 from losses.loss_types import LossType
 
 from models.backbone import MultiHeadBackbone
-from models.multi_model import MultiNetModel
+from models.multi_model import MultiNetModel, freeze_heads
 from models.lenet import LeNet
 
 from spurious_datasets.cifar_mnist import get_cifar_mnist_datasets
@@ -74,14 +74,7 @@ from spurious_datasets.toy_grid import get_toy_grid_datasets
 from spurious_datasets.waterbirds import get_waterbirds_datasets
 from spurious_datasets.multi_nli import get_multi_nli_datasets
 from config import Config, post_init
-
-
-# In[ ]:
-
-
-# TODO: add dbat 
-# TODO: add other vision datasets 
-# TODO: add language datasets 
+from utils.utils import to_device, batch_size
 
 
 # In[ ]:
@@ -89,14 +82,14 @@ from config import Config, post_init
 
 conf = Config(
     seed=45,
-    dataset="multi_nli",
+    dataset="cifar_mnist",
     loss_type=LossType.TOPK,
-    batch_size=32,
-    target_batch_size=64,
+    batch_size=16,
+    target_batch_size=32,
     epochs=10,
     heads=2,
     binary=True, # True
-    model="bert",
+    model="Resnet50",
     shared_backbone=True,
     source_weight=1.0,
     aux_weight=1.0,
@@ -104,7 +97,7 @@ conf = Config(
     source_l_01_mix_rate=None,
     source_l_10_mix_rate=None,
     mix_rate=0.5,
-    aggregate_mix_rate=True,#TODO: True
+    aggregate_mix_rate=False,#TODO: True
     l_01_mix_rate=None,
     l_10_mix_rate=None,
     mix_rate_lower_bound=0.5,
@@ -112,13 +105,15 @@ conf = Config(
     l_10_mix_rate_lower_bound=None, # 0.1
     all_unlabeled=False,
     inbalance_ratio=False,
-    lr=2e-5, # 1e-3 maybe?
+    lr=1e-4, # 1e-3 maybe?
     weight_decay=1e-4,
-    lr_scheduler="cosine",
+    lr_scheduler=None,
     num_cycles=0.5,
     frac_warmup=0.05,
     max_length=256,
     num_workers=6,
+    freeze_heads=False,
+    head_1_epochs=5,
     device="cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),
     exp_dir=f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     plot_activations=False
@@ -149,6 +144,15 @@ if conf.model == "ClipViT":
 if conf.model == "Resnet50":
     conf.lr = 1e-4 # probably too high, should be 1e-4
 
+
+
+# In[ ]:
+
+
+if conf.dataset == "multi_nli":
+    conf.model = "bert"
+    conf.lr = 1e-5
+    conf.lr_scheduler = "cosine"
 
 
 # In[ ]:
@@ -194,8 +198,8 @@ tokenizer = None
 if conf.model == "Resnet50":
     from torchvision import models
     from torchvision.models.resnet import ResNet50_Weights
-    resnet50 = models.resnet50(weights=ResNet50_Weights.DEFAULT)
-    model_builder = lambda: torch.nn.Sequential(*list(resnet50.children())[:-1])
+    resnet_builder = lambda: models.resnet50(weights=ResNet50_Weights.DEFAULT)  
+    model_builder = lambda: torch.nn.Sequential(*list(resnet_builder().children())[:-1])
     resnet_50_transforms = ResNet50_Weights.DEFAULT.transforms()
     model_transform = transforms.Compose([
         transforms.Resize(resnet_50_transforms.resize_size * 2, interpolation=resnet_50_transforms.interpolation),
@@ -213,8 +217,9 @@ elif conf.model == "ClipViT":
     #     transforms.Resize((224, 224), interpolation=transforms.InterpolationMode.BICUBIC)
     # ])
     import clip 
-    clip_model, preprocess = clip.load('ViT-B/32', device='cpu')
-    model_builder = lambda: clip_model.visual
+    preprocess = clip.clip._transform(224)
+    clip_builder = lambda: clip.load('ViT-B/32', device='cpu')[0]
+    model_builder = lambda: clip_builder().visual
     model_transform = transforms.Compose([
         preprocess.transforms[0],
         preprocess.transforms[1],
@@ -225,9 +230,8 @@ elif conf.model == "ClipViT":
 elif conf.model == "bert":
     from transformers import BertModel, BertTokenizer
     from models.hf_wrapper import HFWrapper
-    backbone = BertModel.from_pretrained('bert-base-uncased')
-    backbone = HFWrapper(backbone)
-    model_builder = lambda: backbone
+    bert_builder = lambda: BertModel.from_pretrained('bert-base-uncased')
+    model_builder = lambda: HFWrapper(bert_builder())
     feature_dim = 768
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 elif conf.model == "toy_model":
@@ -346,7 +350,7 @@ if conf.shared_backbone:
     net = MultiHeadBackbone(model_builder(), conf.heads, feature_dim, classes if not conf.binary else 1)
 else:
     print("warning, not using shared backbone untested")
-    net = MultiNetModel(heads=conf.heads, model_builder=model_builder)
+    net = MultiNetModel(heads=conf.heads, model_builder=model_builder, feature_dim=feature_dim)
 net = net.to(conf.device)
 
 # optimizer
@@ -366,6 +370,8 @@ else:
 # loss function
 if conf.loss_type == LossType.DIVDIS:
     loss_fn = DivDisLoss(heads=conf.heads)
+elif conf.loss_type == LossType.DBAT:
+    loss_fn = DBatLoss(heads=conf.heads)
 elif conf.loss_type == LossType.CONF:
     loss_fn = ConfLoss()
 elif conf.loss_type == LossType.SMOOTH:
@@ -577,18 +583,17 @@ def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: b
 # In[ ]:
 
 
-from utils.utils import to_device, batch_size
-
-
-# In[ ]:
-
-
 metrics = defaultdict(list)
 target_iter = iter(target_train_loader)
+if conf.freeze_heads:
+    # freeze second head 
+    net.freeze_head(1)
 for epoch in range(conf.epochs):
     for batch_idx, (x, y, gl) in tqdm(enumerate(source_train_loader), desc="Source train", total=len(source_train_loader)):
         x, y, gl = to_device(x, y, gl, conf.device)
-        # source loss
+        if conf.freeze_heads and epoch == conf.head_1_epochs:
+            net.unfreeze_head(1)
+            net.freeze_head(0)
         logits = net(x)
         losses = compute_src_losses(logits, y, conf.binary)
         xent = sum(losses)
@@ -601,6 +606,8 @@ for epoch in range(conf.epochs):
         target_x, target_y, target_gl = to_device(target_x, target_y, target_gl, conf.device)
         target_logits = net(target_x)
         repulsion_loss = loss_fn(target_logits)
+        if conf.freeze_heads and epoch < conf.head_1_epochs:
+            repulsion_loss = torch.tensor(0.0, device=conf.device)
         # full loss 
         full_loss = conf.source_weight * xent + conf.aux_weight * repulsion_loss
         opt.zero_grad()
