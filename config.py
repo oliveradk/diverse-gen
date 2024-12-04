@@ -63,6 +63,9 @@ def post_init(conf: Config, overrides: list[str]=[]):
         assert conf.mix_rate is not None
         conf.l_01_mix_rate = conf.mix_rate / 2
         conf.l_10_mix_rate = conf.mix_rate / 2
+
+    if conf.freeze_heads and "head_1_epochs" not in overrides:
+        conf.head_1_epochs = round(conf.epochs / 2)
     
     conf.source_l_01_mix_rate = conf.source_mix_rate / 2
     conf.source_l_10_mix_rate = conf.source_mix_rate / 2
