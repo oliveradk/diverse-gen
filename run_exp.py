@@ -73,6 +73,7 @@ from spurious_datasets.fmnist_mnist import get_fmnist_mnist_datasets
 from spurious_datasets.toy_grid import get_toy_grid_datasets
 from spurious_datasets.waterbirds import get_waterbirds_datasets
 from spurious_datasets.multi_nli import get_multi_nli_datasets
+from spurious_datasets.celebA import get_celebA_datasets
 from config import Config, post_init
 from utils.utils import to_device, batch_size
 
@@ -82,7 +83,7 @@ from utils.utils import to_device, batch_size
 
 conf = Config(
     seed=45,
-    dataset="cifar_mnist",
+    dataset="celebA-0",
     loss_type=LossType.TOPK,
     batch_size=16,
     target_batch_size=32,
@@ -127,32 +128,17 @@ conf = Config(
 # if conf.dataset == "toy_grid":
 #     conf.model = "toy_model"
 #     conf.epochs = 100
-
-
-# In[ ]:
-
-
 if conf.model == "ClipViT":
     # conf.epochs = 5
     conf.lr = 1e-5
-
-
-# In[ ]:
-
-
 # Resnet50 Configs
 if conf.model == "Resnet50":
     conf.lr = 1e-4 # probably too high, should be 1e-4
-
-
-
-# In[ ]:
-
-
 if conf.dataset == "multi_nli":
     conf.model = "bert"
     conf.lr = 1e-5
     conf.lr_scheduler = "cosine"
+
 
 
 # In[ ]:
@@ -289,6 +275,28 @@ elif conf.dataset == "waterbirds":
     )
     collate_fn = source_train.dataset.collate
     alt_index = 0
+elif conf.dataset.startswith("celebA"):
+    if conf.dataset == "celebA-0":
+        gt_feat = "Male"
+        spur_feat = "Blond_Hair"
+        inv_spur_feat = True
+    elif conf.dataset == "celebA-1":
+        gt_feat = "Mouth_Slightly_Open"
+        spur_feat = "Wearing_Lipstick"
+        inv_spur_feat = False
+    elif conf.dataset == "celebA-2":
+        gt_feat = "Wavy_Hair"
+        spur_feat = "High_Cheekbones"
+        inv_spur_feat = False
+    else: 
+        raise ValueError(f"Dataset {conf.dataset} not supported")
+    source_train, source_val, target_train, target_val, target_test = get_celebA_datasets(
+        mix_rate=conf.mix_rate, 
+        transform=model_transform, 
+        gt_feat=gt_feat,
+        spur_feat=spur_feat,
+        inv_spur_feat=inv_spur_feat
+    )
 elif conf.dataset == "multi_nli":
     source_train, source_val, target_train, target_val, target_test = get_multi_nli_datasets(
         mix_rate=conf.mix_rate,
@@ -310,7 +318,7 @@ else:
 
 
 # plot image 
-img = source_train[0][0]
+img, y, gl = source_train[0]
 # pad 
 # to PIL image 
 
