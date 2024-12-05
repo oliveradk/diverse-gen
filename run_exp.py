@@ -83,10 +83,10 @@ from utils.utils import to_device, batch_size
 
 conf = Config(
     seed=45,
-    dataset="celebA-0",
+    dataset="waterbirds",
     loss_type=LossType.TOPK,
-    batch_size=16,
-    target_batch_size=32,
+    batch_size=32,
+    target_batch_size=64,
     epochs=10,
     heads=2,
     binary=True, # True
