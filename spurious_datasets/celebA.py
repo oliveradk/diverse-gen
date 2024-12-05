@@ -37,8 +37,8 @@ def get_celebA_datasets(
     mix_rate: Optional[float]=None,
     val_split=0.2,
     transform=None,
-    gt_feat: str='Male',
-    spur_feat: str='Blond_Hair',
+    gt_feat: str='Blond_Hair',
+    spur_feat: str='Male',
     inv_spur_feat: bool=True
 ):
     

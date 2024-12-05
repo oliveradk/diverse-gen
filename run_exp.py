@@ -277,8 +277,8 @@ elif conf.dataset == "waterbirds":
     alt_index = 0
 elif conf.dataset.startswith("celebA"):
     if conf.dataset == "celebA-0":
-        gt_feat = "Male"
-        spur_feat = "Blond_Hair"
+        gt_feat = "Blond_Hair"
+        spur_feat = "Male"
         inv_spur_feat = True
     elif conf.dataset == "celebA-1":
         gt_feat = "Mouth_Slightly_Open"
