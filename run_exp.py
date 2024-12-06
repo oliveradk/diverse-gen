@@ -40,6 +40,7 @@ from tqdm import tqdm
 from collections import defaultdict
 from functools import partial
 from datetime import datetime
+from dataclasses import dataclass 
 
 from omegaconf import OmegaConf
 import numpy as np
@@ -81,44 +82,88 @@ from utils.utils import to_device, batch_size
 # In[ ]:
 
 
-conf = Config(
-    seed=45,
-    dataset="waterbirds",
-    loss_type=LossType.TOPK,
-    batch_size=32,
-    target_batch_size=64,
-    epochs=10,
-    heads=2,
-    binary=True, # True
-    model="Resnet50",
-    shared_backbone=True,
-    source_weight=1.0,
-    aux_weight=1.0,
-    source_mix_rate=0.0,
-    source_l_01_mix_rate=None,
-    source_l_10_mix_rate=None,
-    mix_rate=0.5,
-    aggregate_mix_rate=False,#TODO: True
-    l_01_mix_rate=None,
-    l_10_mix_rate=None,
-    mix_rate_lower_bound=0.5,
-    l_01_mix_rate_lower_bound=None, # 0.4
-    l_10_mix_rate_lower_bound=None, # 0.1
-    all_unlabeled=False,
-    inbalance_ratio=False,
-    lr=1e-4, # 1e-3 maybe?
-    weight_decay=1e-4,
-    lr_scheduler=None,
-    num_cycles=0.5,
-    frac_warmup=0.05,
-    max_length=256,
-    num_workers=6,
-    freeze_heads=False,
-    head_1_epochs=5,
-    device="cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),
-    exp_dir=f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
-    plot_activations=False
-)
+@dataclass
+class Config():
+    seed: int = 45
+    dataset: str = "waterbirds"
+    loss_type: LossType = LossType.DIVDIS
+    batch_size: int = 32
+    target_batch_size: int = 64
+    epochs: int = 10
+    heads: int = 2
+    binary: bool = True
+    model: str = "Resnet50"
+    shared_backbone: bool = True
+    source_weight: float = 1.0
+    aux_weight: float = 1.0
+    use_group_labels: bool = False
+    source_cc: bool = True
+    source_mix_rate: Optional[float] = 0.0
+    source_01_mix_rate: Optional[float] = None
+    source_10_mix_rate: Optional[float] = None
+    mix_rate: Optional[float] = 0.5
+    target_01_mix_rate: Optional[float] = None
+    target_10_mix_rate: Optional[float] = None
+    aggregate_mix_rate: bool = False
+    mix_rate_lower_bound: Optional[float] = 0.5
+    target_01_mix_rate_lower_bound: Optional[float] = None
+    target_10_mix_rate_lower_bound: Optional[float] = None
+    pseudo_label_all_groups: bool = False
+    inbalance_ratio: Optional[bool] = False
+    lr: float = 1e-4
+    weight_decay: float = 1e-4
+    lr_scheduler: Optional[str] = None 
+    num_cycles: float = 0.5
+    frac_warmup: float = 0.05
+    max_length: int = 128
+    num_workers: int = 6
+    freeze_heads: bool = False
+    head_1_epochs: int = 5
+    device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    plot_activations: bool = False
+
+def post_init(conf: Config, overrides: list[str]=[]):
+    if conf.target_01_mix_rate is not None and conf.target_10_mix_rate is None:
+        conf.target_10_mix_rate = 0.0
+        if conf.mix_rate is None:
+            conf.mix_rate = conf.target_01_mix_rate
+        assert conf.mix_rate == conf.target_01_mix_rate
+    elif conf.target_01_mix_rate is None and conf.target_10_mix_rate is not None:
+        conf.target_01_mix_rate = 0.0
+        if conf.mix_rate is None:
+            conf.mix_rate = conf.target_10_mix_rate
+        assert conf.mix_rate == conf.target_10_mix_rate
+    elif conf.target_01_mix_rate is not None and conf.target_10_mix_rate is not None:
+        if conf.mix_rate is None:
+            conf.mix_rate = conf.target_01_mix_rate + conf.target_10_mix_rate
+        assert conf.mix_rate == conf.target_01_mix_rate + conf.target_10_mix_rate
+    else: # both are none 
+        assert conf.mix_rate is not None
+        conf.target_01_mix_rate = conf.mix_rate / 2
+        conf.target_10_mix_rate = conf.mix_rate / 2
+
+    if conf.freeze_heads and "head_1_epochs" not in overrides:
+        conf.head_1_epochs = round(conf.epochs / 2)
+    
+    conf.source_01_mix_rate = conf.source_mix_rate / 2
+    conf.source_10_mix_rate = conf.source_mix_rate / 2
+    
+
+
+    
+    if conf.mix_rate_lower_bound is None:
+        conf.mix_rate_lower_bound = conf.mix_rate
+
+    if conf.target_01_mix_rate_lower_bound is None and conf.target_10_mix_rate_lower_bound is None:
+        conf.target_01_mix_rate_lower_bound = conf.mix_rate_lower_bound / 2
+        conf.target_10_mix_rate_lower_bound = conf.mix_rate_lower_bound / 2
+
+
+# In[ ]:
+
+
+conf = Config()
 
 
 # In[ ]:
@@ -238,43 +283,43 @@ else:
 
 
 collate_fn = None
-alt_index = 1
 classes = 2
 is_img = True
+alt_index = 1
 
 if conf.dataset == "toy_grid":
     source_train, source_val, target_train, target_val, target_test = get_toy_grid_datasets(
-        source_mix_rate_0_1=conf.source_l_01_mix_rate, 
-        source_mix_rate_1_0=conf.source_l_10_mix_rate, 
-        target_mix_rate_0_1=conf.l_01_mix_rate, 
-        target_mix_rate_1_0=conf.l_10_mix_rate, 
+        source_mix_rate_0_1=conf.source_01_mix_rate, 
+        source_mix_rate_1_0=conf.source_10_mix_rate, 
+        target_mix_rate_0_1=conf.target_01_mix_rate, 
+        target_mix_rate_1_0=conf.target_10_mix_rate, 
     )
 elif conf.dataset == "cifar_mnist":
     source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
-        source_mix_rate_0_1=conf.source_l_01_mix_rate, 
-        source_mix_rate_1_0=conf.source_l_10_mix_rate, 
-        target_mix_rate_0_1=conf.l_01_mix_rate, 
-        target_mix_rate_1_0=conf.l_10_mix_rate, 
+        source_mix_rate_0_1=conf.source_01_mix_rate, 
+        source_mix_rate_1_0=conf.source_10_mix_rate, 
+        target_mix_rate_0_1=conf.target_01_mix_rate, 
+        target_mix_rate_1_0=conf.target_10_mix_rate, 
         transform=model_transform, 
         pad_sides=pad_sides
     )
 
 elif conf.dataset == "fmnist_mnist":
     source_train, source_val, target_train, target_val, target_test = get_fmnist_mnist_datasets(
-        source_mix_rate_0_1=conf.source_l_01_mix_rate, 
-        source_mix_rate_1_0=conf.source_l_10_mix_rate, 
-        target_mix_rate_0_1=conf.l_01_mix_rate, 
-        target_mix_rate_1_0=conf.l_10_mix_rate, 
+        source_mix_rate_0_1=conf.source_01_mix_rate, 
+        source_mix_rate_1_0=conf.source_10_mix_rate, 
+        target_mix_rate_0_1=conf.target_01_mix_rate, 
+        target_mix_rate_1_0=conf.target_10_mix_rate, 
         transform=model_transform, 
         pad_sides=pad_sides
     )
 elif conf.dataset == "waterbirds":
     source_train, source_val, target_train, target_val, target_test = get_waterbirds_datasets(
         mix_rate=conf.mix_rate, 
+        source_cc=conf.source_cc,
         transform=model_transform, 
     )
     collate_fn = source_train.dataset.collate
-    alt_index = 0
 elif conf.dataset.startswith("celebA"):
     if conf.dataset == "celebA-0":
         gt_feat = "Blond_Hair"
@@ -292,6 +337,7 @@ elif conf.dataset.startswith("celebA"):
         raise ValueError(f"Dataset {conf.dataset} not supported")
     source_train, source_val, target_train, target_val, target_test = get_celebA_datasets(
         mix_rate=conf.mix_rate, 
+        source_cc=conf.source_cc,
         transform=model_transform, 
         gt_feat=gt_feat,
         spur_feat=spur_feat,
@@ -300,6 +346,7 @@ elif conf.dataset.startswith("celebA"):
 elif conf.dataset == "multi_nli":
     source_train, source_val, target_train, target_val, target_test = get_multi_nli_datasets(
         mix_rate=conf.mix_rate,
+        source_cc=conf.source_cc,
         tokenizer=tokenizer,
         max_length=conf.max_length, 
         dataset_length=None
@@ -393,7 +440,7 @@ elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
         group_mix_rates = None
     else:
         mix_rate = None 
-        group_mix_rates = {(0, 1): conf.l_01_mix_rate_lower_bound, (1, 0): conf.l_10_mix_rate_lower_bound}
+        group_mix_rates = {(0, 1): conf.target_01_mix_rate_lower_bound, (1, 0): conf.target_10_mix_rate_lower_bound}
     loss_fn = ACELoss(
         heads=conf.heads, 
         classes=classes,
@@ -402,7 +449,7 @@ elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
         inbalance_ratio=conf.inbalance_ratio,
         mix_rate=mix_rate,
         group_mix_rates=group_mix_rates,
-        all_unlabeled=conf.all_unlabeled,
+        pseudo_label_all_groups=conf.pseudo_label_all_groups,
         device=conf.device
     )
 else:
@@ -571,12 +618,14 @@ if not is_notebook() and conf.plot_activations:
 # In[ ]:
 
 
-def compute_src_losses(logits, y, binary):
+def compute_src_losses(logits, y, gl, binary, use_group_labels):
     logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
+    labels = torch.cat([y, y], dim=-1) if not use_group_labels else gl
+    labels_chunked = torch.chunk(labels, conf.heads, dim=-1)
     if binary:
-        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.to(torch.float32)) for logit in logits_chunked]
+        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.squeeze().to(torch.float32)) for logit, y in zip(logits_chunked, labels_chunked)]
     else:
-        losses = [F.cross_entropy(logit.squeeze(), y.to(torch.long)) for logit in logits_chunked]
+        losses = [F.cross_entropy(logit.squeeze(), y.squeeze().to(torch.long)) for logit, y in zip(logits_chunked, labels_chunked)]
     return losses
 
 def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: bool):
@@ -603,7 +652,7 @@ for epoch in range(conf.epochs):
             net.unfreeze_head(1)
             net.freeze_head(0)
         logits = net(x)
-        losses = compute_src_losses(logits, y, conf.binary)
+        losses = compute_src_losses(logits, y, gl, conf.binary, conf.use_group_labels)
         xent = sum(losses)
         # target loss 
         try: 
@@ -648,7 +697,7 @@ for epoch in range(conf.epochs):
             for x, y, gl in tqdm(source_val_loader, desc="Source val"):
                 x, y, gl = to_device(x, y, gl, conf.device)
                 logits_val = net(x)
-                losses_val = compute_src_losses(logits_val, y, conf.binary)
+                losses_val = compute_src_losses(logits_val, y, gl, conf.binary, conf.use_group_labels)
                 xent_val.append(sum(losses_val).item())
         metrics[f"source_val_xent"].append(np.mean(xent_val))
         metrics[f"val_loss"].append(np.mean(repulsion_losses_val) + np.mean(xent_val))

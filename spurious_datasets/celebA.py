@@ -35,6 +35,7 @@ class CelebA(Dataset):
 
 def get_celebA_datasets(
     mix_rate: Optional[float]=None,
+    source_cc: bool = True, 
     val_split=0.2,
     transform=None,
     gt_feat: str='Blond_Hair',
@@ -66,7 +67,8 @@ def get_celebA_datasets(
 
     ### Source ###
     # remove train instances without gennder hair correlation 
-    anno_source = anno_source[anno_source[spur_feat] == anno_source[gt_feat]]
+    if source_cc:
+        anno_source = anno_source[anno_source[spur_feat] == anno_source[gt_feat]]
 
     ### Target ###
     target_id_idxs = np.where(anno_target[spur_feat] == anno_target[gt_feat])[0]

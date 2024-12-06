@@ -70,7 +70,7 @@ class ACELoss(t.nn.Module):
         inbalance_ratio: bool = False,
         mix_rate: Optional[float] = 0.5,
         group_mix_rates: Optional[dict[tuple[int, ...], float]] = None,
-        all_unlabeled: bool = False,
+        pseudo_label_all_groups: bool = False,
         device: str = "cpu"
     ):
         super().__init__()
@@ -82,7 +82,7 @@ class ACELoss(t.nn.Module):
         self.inbalance_ratio = inbalance_ratio 
         self.mix_rate = mix_rate
         self.group_mix_rates = group_mix_rates
-        self.all_unlabeled = all_unlabeled
+        self.pseudo_label_all_groups = pseudo_label_all_groups
         self.device = device
     
     def forward(self, logits):
@@ -104,7 +104,7 @@ class ACELoss(t.nn.Module):
         # compute losses for each group (a set of labels for each head)
         group_losses = compute_group_losses(head_losses, self.heads, self.classes)
         # remove agreeing groups
-        if not self.all_unlabeled: 
+        if not self.pseudo_label_all_groups: 
             group_losses = {group: loss for group, loss in group_losses.items() if len(set(group)) > 1}
        
         # min over the group index (so each instance only gets one pseudo-label)

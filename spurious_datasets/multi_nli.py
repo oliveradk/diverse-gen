@@ -84,6 +84,7 @@ def load_negation_metadata(dataset, filename, data_dir):
 
 def get_multi_nli_datasets(
     mix_rate: Optional[float]=None,
+    source_cc: bool = True, 
     val_split=0.2,
     tokenizer=None,
     max_length=128,
@@ -120,8 +121,9 @@ def get_multi_nli_datasets(
 
     ### Source Distribution ###
     # filter source distribution (complete correlation)
-    dataset['train'] = dataset['train'].filter(lambda ex: not (ex['label'] == 0 and ex["sentence2_has_negation"]))
-    dataset['train'] = dataset['train'].filter(lambda ex: not (ex['label'] == 1 and not ex["sentence2_has_negation"]))
+    if source_cc:
+        dataset['train'] = dataset['train'].filter(lambda ex: not (ex['label'] == 0 and ex["sentence2_has_negation"]))
+        dataset['train'] = dataset['train'].filter(lambda ex: not (ex['label'] == 1 and not ex["sentence2_has_negation"]))
 
     # balance source dataset
     entailment_label_idxs = torch.where(torch.tensor(dataset['train']['label']) == 0)[0]

@@ -1,12 +1,24 @@
 import numpy as np
 
+import torch
+from torch.utils.data import random_split
 from torchvision import transforms
 
 from wilds.datasets.waterbirds_dataset import WaterbirdsDataset
 from wilds.datasets.wilds_dataset import WILDSDataset, WILDSSubset
 
+
+class CustomWaterbirdsDataset(WaterbirdsDataset):
+    def __getitem__(self, idx):
+        x, y, metadata = super().__getitem__(idx)
+        metadata = metadata[:2] # remove "from source domain" metadata 
+        # switch first and second element 
+        metadata = metadata[[1, 0]] # y, background
+        return x, y, metadata
+
 def get_waterbirds_datasets(
     mix_rate=0.5,
+    source_cc=True,
     transform=None, 
     val_split=0.2, 
 ):
@@ -15,13 +27,13 @@ def get_waterbirds_datasets(
         transform_list.append(transform)
     transform = transforms.Compose(transform_list)
 
-    dataset = WaterbirdsDataset(root_dir="./data/waterbirds", download=True)
+    dataset = CustomWaterbirdsDataset(root_dir="./data/waterbirds", download=True)
 
     # source 
-    source_mask = (dataset.split_array == 0) & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy()
+    source_mask = (dataset.split_array == 0)
+    if source_cc:
+        source_mask = source_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy()
     source_idxs = np.where(source_mask)[0]
-    np.random.shuffle(source_idxs) # TODO: ideally remove this randomness
-    source_train_idxs, source_val_idxs = np.split(source_idxs, [int(len(source_idxs) * (1 - val_split))])
 
     # target 
     target_mask = dataset.split_array == 1
@@ -46,15 +58,27 @@ def get_waterbirds_datasets(
         id_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy())[0]
    
     target_idxs = np.concatenate([id_idxs, ood_idxs])
-    np.random.shuffle(target_idxs) #TODO: ideally remove this randomness
-    target_train_idxs, target_val_idxs = np.split(target_idxs, [int(len(target_idxs) * (1 - val_split))])
 
     # test 
     test_mask = dataset.split_array == 2
     test_idxs = np.where(test_mask)[0]
-    
-    source_train, source_val = WILDSSubset(dataset, source_train_idxs, transform), WILDSSubset(dataset, source_val_idxs, transform)
-    target_train, target_val = WILDSSubset(dataset, target_train_idxs, transform), WILDSSubset(dataset, target_val_idxs, transform)
+
+    # create datasets
+    source = WILDSSubset(dataset, source_idxs, transform)
+    target = WILDSSubset(dataset, target_idxs, transform)
     test = WILDSSubset(dataset, test_idxs, transform)
+
+    # split datasets
+    source_train, source_val = random_split(
+        source, 
+        [round(len(source) * (1 - val_split)), round(len(source) * val_split)],
+        generator=torch.Generator().manual_seed(42)
+    )
+    target_train, target_val = random_split(
+        target, 
+        [round(len(target) * (1 - val_split)), round(len(target) * val_split)], 
+        generator=torch.Generator().manual_seed(42)
+    )
+
 
     return source_train, source_val, target_train, target_val, test
