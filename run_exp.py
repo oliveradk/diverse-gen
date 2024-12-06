@@ -75,7 +75,6 @@ from spurious_datasets.toy_grid import get_toy_grid_datasets
 from spurious_datasets.waterbirds import get_waterbirds_datasets
 from spurious_datasets.multi_nli import get_multi_nli_datasets
 from spurious_datasets.celebA import get_celebA_datasets
-from config import Config, post_init
 from utils.utils import to_device, batch_size
 
 
