@@ -62,6 +62,7 @@ from losses.divdis import DivDisLoss
 from losses.ace import ACELoss
 from losses.conf import ConfLoss
 from losses.dbat import DBatLoss
+from losses.pass_through import PassThroughLoss
 from losses.smooth_top_loss import SmoothTopLoss
 from losses.loss_types import LossType
 
@@ -75,6 +76,7 @@ from spurious_datasets.toy_grid import get_toy_grid_datasets
 from spurious_datasets.waterbirds import get_waterbirds_datasets
 from spurious_datasets.camelyon import get_camelyon_datasets
 from spurious_datasets.multi_nli import get_multi_nli_datasets
+from spurious_datasets.civil_comments import get_civil_comments_datasets
 from spurious_datasets.celebA import get_celebA_datasets
 
 from utils.utils import to_device, batch_size
@@ -101,7 +103,7 @@ class Config():
     source_weight: float = 1.0
     aux_weight: float = 1.0
     use_group_labels: bool = False
-    source_cc: bool = True
+    source_cc: bool = False
     source_mix_rate: Optional[float] = 0.0
     source_01_mix_rate: Optional[float] = None
     source_10_mix_rate: Optional[float] = None
@@ -109,7 +111,7 @@ class Config():
     target_01_mix_rate: Optional[float] = None
     target_10_mix_rate: Optional[float] = None
     aggregate_mix_rate: bool = False
-    mix_rate_lower_bound: Optional[float] = 0.5
+    mix_rate_lower_bound: Optional[float] = 0.1
     target_01_mix_rate_lower_bound: Optional[float] = None
     target_10_mix_rate_lower_bound: Optional[float] = None
     pseudo_label_all_groups: bool = False
@@ -123,6 +125,7 @@ class Config():
     num_workers: int = 6
     freeze_heads: bool = False
     head_1_epochs: int = 5
+    dataset_length: Optional[int] = None
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     plot_activations: bool = False
@@ -143,23 +146,22 @@ def post_init(conf: Config, overrides: list[str]=[]):
             conf.mix_rate = conf.target_01_mix_rate + conf.target_10_mix_rate
         assert conf.mix_rate == conf.target_01_mix_rate + conf.target_10_mix_rate
     else: # both are none 
-        assert conf.mix_rate is not None
-        conf.target_01_mix_rate = conf.mix_rate / 2
-        conf.target_10_mix_rate = conf.mix_rate / 2
+        if conf.mix_rate is not None:
+            conf.target_01_mix_rate = conf.mix_rate / 2
+            conf.target_10_mix_rate = conf.mix_rate / 2
 
     if conf.freeze_heads and "head_1_epochs" not in overrides:
         conf.head_1_epochs = round(conf.epochs / 2)
     
-    conf.source_01_mix_rate = conf.source_mix_rate / 2
-    conf.source_10_mix_rate = conf.source_mix_rate / 2
+    if conf.source_mix_rate is not None:
+        conf.source_01_mix_rate = conf.source_mix_rate / 2
+        conf.source_10_mix_rate = conf.source_mix_rate / 2
     
 
-
-    
     if conf.mix_rate_lower_bound is None:
         conf.mix_rate_lower_bound = conf.mix_rate
 
-    if conf.target_01_mix_rate_lower_bound is None and conf.target_10_mix_rate_lower_bound is None:
+    if conf.target_01_mix_rate_lower_bound is None and conf.target_10_mix_rate_lower_bound is None and conf.mix_rate_lower_bound is not None:
         conf.target_01_mix_rate_lower_bound = conf.mix_rate_lower_bound / 2
         conf.target_10_mix_rate_lower_bound = conf.mix_rate_lower_bound / 2
 
@@ -183,7 +185,7 @@ if conf.model == "ClipViT":
 # Resnet50 Configs
 if conf.model == "Resnet50":
     conf.lr = 1e-4 # probably too high, should be 1e-4
-if conf.dataset == "multi_nli":
+if conf.dataset == "multi_nli" or conf.dataset == "civil_comments":
     conf.model = "bert"
     conf.lr = 1e-5
     conf.lr_scheduler = "cosine"
@@ -345,19 +347,28 @@ elif conf.dataset.startswith("celebA"):
         transform=model_transform, 
         gt_feat=gt_feat,
         spur_feat=spur_feat,
-        inv_spur_feat=inv_spur_feat
+        inv_spur_feat=inv_spur_feat,
+        dataset_length=conf.dataset_length
     )
 elif conf.dataset == "camelyon":
     source_train, source_val, target_train, target_val, target_test = get_camelyon_datasets(
         transform=model_transform
     )
+elif conf.dataset == "civil_comments":
+    source_train, source_val, target_train, target_val, target_test = get_civil_comments_datasets(
+        tokenizer=tokenizer,
+        max_length=conf.max_length, 
+        dataset_length=conf.dataset_length
+    )
+    is_img = False
+
 elif conf.dataset == "multi_nli":
     source_train, source_val, target_train, target_val, target_test = get_multi_nli_datasets(
         mix_rate=conf.mix_rate,
         source_cc=conf.source_cc,
         tokenizer=tokenizer,
         max_length=conf.max_length, 
-        dataset_length=None
+        dataset_length=conf.dataset_length
     )
     is_img = False
 
@@ -442,6 +453,8 @@ elif conf.loss_type == LossType.SMOOTH:
         criterion=partial(F.binary_cross_entropy_with_logits, reduction='none'), 
         device=conf.device
     )
+elif conf.loss_type == LossType.ERM:
+    loss_fn = PassThroughLoss()
 elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
     if conf.aggregate_mix_rate:
         mix_rate = conf.mix_rate_lower_bound 
