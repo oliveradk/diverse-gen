@@ -9,3 +9,4 @@ class LossType(Enum):
     CONF = 'conf'
     DIVDIS = 'divdis'
     DBAT = 'dbat'
+    ERM = 'erm'

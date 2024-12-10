@@ -40,7 +40,8 @@ def get_celebA_datasets(
     transform=None,
     gt_feat: str='Blond_Hair',
     spur_feat: str='Male',
-    inv_spur_feat: bool=True
+    inv_spur_feat: bool=True,
+    dataset_length: Optional[int]=None
 ):
     
     transform_list = [transforms.ToTensor()]
@@ -86,6 +87,12 @@ def get_celebA_datasets(
         target_ood_idxs = target_ood_idxs[:num_ood_target]
     anno_target = anno_target.iloc[np.concatenate((target_id_idxs, target_ood_idxs))]
 
+
+    if dataset_length is not None:
+        anno_source = anno_source.iloc[:dataset_length]
+        anno_target = anno_target.iloc[:dataset_length]
+        anno_test = anno_test.iloc[:dataset_length]
+
     # create datasets
     source = CelebA(root_dir, anno_source, transform, gt_feat, [spur_feat])
     target = CelebA(root_dir, anno_target, transform, gt_feat, [spur_feat])
@@ -102,7 +109,6 @@ def get_celebA_datasets(
         [round(len(target) * (1 - val_split)), round(len(target) * val_split)], 
         generator=torch.Generator().manual_seed(42)
     )
-
     return source_train, source_val, target_train, target_val, test
 
     

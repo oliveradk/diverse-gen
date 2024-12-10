@@ -1,3 +1,5 @@
+from typing import Optional, Callable
+
 import numpy as np
 
 import torch
@@ -17,10 +19,10 @@ class CustomWaterbirdsDataset(WaterbirdsDataset):
         return x, y, metadata
 
 def get_waterbirds_datasets(
-    mix_rate=0.5,
-    source_cc=True,
-    transform=None, 
-    val_split=0.2, 
+    mix_rate: Optional[float] = 0.5,
+    source_cc: bool = True,
+    transform: Optional[Callable] = None, 
+    val_split: float = 0.2, 
 ):
     transform_list = [transforms.ToTensor()]
     if transform is not None:
@@ -36,28 +38,31 @@ def get_waterbirds_datasets(
     source_idxs = np.where(source_mask)[0]
 
     # target 
-    target_mask = dataset.split_array == 1
-    # compute current mix rate 
-    num_ood = (dataset.metadata_array[target_mask][:, 0] != dataset.metadata_array[target_mask][:, 1]).sum().item()
-    num_id = (dataset.metadata_array[target_mask][:, 0] == dataset.metadata_array[target_mask][:, 1]).sum().item()
-    cur_mix_rate = num_ood / sum(target_mask)
-    # if less than target, remove ood instances (iid = ood/mix_rate - ood)
-    if cur_mix_rate < mix_rate:
-        num_id_target = int((num_ood / mix_rate) - num_ood)
-        id_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy())[0]
-        id_idxs = id_idxs[:num_id_target]
-        ood_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] != dataset.metadata_array[:, 1]).numpy())[0]
-    else: # if greate than target, remove iid instances (ood = ood/mix_rate - id)
-        # mix rate = (ood) / (ood + id)
-        # -> (ood + id) * mix rate = ood 
-        # -> mix_rate -1 * ood = - id * mix rate 
-        # -> ood = id * mix rate / (1 - mix rate)
-        num_ood_target = int(num_id * mix_rate / (1 - mix_rate))
-        ood_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] != dataset.metadata_array[:, 1]).numpy())[0]
-        ood_idxs = ood_idxs[:num_ood_target]
-        id_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy())[0]
-   
-    target_idxs = np.concatenate([id_idxs, ood_idxs])
+    if mix_rate is None: 
+        target_idxs = np.where(dataset.split_array == 1)[0]
+    else:
+        target_mask = dataset.split_array == 1
+        # compute current mix rate 
+        num_ood = (dataset.metadata_array[target_mask][:, 0] != dataset.metadata_array[target_mask][:, 1]).sum().item()
+        num_id = (dataset.metadata_array[target_mask][:, 0] == dataset.metadata_array[target_mask][:, 1]).sum().item()
+        cur_mix_rate = num_ood / sum(target_mask)
+        # if less than target, remove ood instances (iid = ood/mix_rate - ood)
+        if cur_mix_rate < mix_rate:
+            num_id_target = int((num_ood / mix_rate) - num_ood)
+            id_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy())[0]
+            id_idxs = id_idxs[:num_id_target]
+            ood_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] != dataset.metadata_array[:, 1]).numpy())[0]
+        else: # if greate than target, remove iid instances (ood = ood/mix_rate - id)
+            # mix rate = (ood) / (ood + id)
+            # -> (ood + id) * mix rate = ood 
+            # -> mix_rate -1 * ood = - id * mix rate 
+            # -> ood = id * mix rate / (1 - mix rate)
+            num_ood_target = int(num_id * mix_rate / (1 - mix_rate))
+            ood_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] != dataset.metadata_array[:, 1]).numpy())[0]
+            ood_idxs = ood_idxs[:num_ood_target]
+            id_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy())[0]
+    
+        target_idxs = np.concatenate([id_idxs, ood_idxs])
 
     # test 
     test_mask = dataset.split_array == 2
