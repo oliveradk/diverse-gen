@@ -23,6 +23,8 @@ clip = {git = "https://github.com/openai/CLIP.git"}
 scikit-learn = "^1.5.2"
 wilds = "^2.0.0"
 ipdb = "^0.13.13"
+tensorboard = "^2.18.0"
+accelerate = "^1.2.0"
 
 
 [build-system]

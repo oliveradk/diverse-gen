@@ -73,19 +73,24 @@ from spurious_datasets.cifar_mnist import get_cifar_mnist_datasets
 from spurious_datasets.fmnist_mnist import get_fmnist_mnist_datasets
 from spurious_datasets.toy_grid import get_toy_grid_datasets
 from spurious_datasets.waterbirds import get_waterbirds_datasets
+from spurious_datasets.camelyon import get_camelyon_datasets
 from spurious_datasets.multi_nli import get_multi_nli_datasets
 from spurious_datasets.celebA import get_celebA_datasets
-from utils.utils import to_device, batch_size
 
+from utils.utils import to_device, batch_size
+from utils.act_utils import get_acts_and_labels, plot_activations, transform_activations
+
+
+# # Setup Experiment
 
 # In[ ]:
 
 
 @dataclass
 class Config():
-    seed: int = 45
-    dataset: str = "waterbirds"
-    loss_type: LossType = LossType.DIVDIS
+    seed: int = 2
+    dataset: str = "cifar_mnist"
+    loss_type: LossType = LossType.TOPK
     batch_size: int = 32
     target_batch_size: int = 64
     epochs: int = 10
@@ -169,9 +174,9 @@ conf = Config()
 
 
 # # # toy grid configs 
-# if conf.dataset == "toy_grid":
-#     conf.model = "toy_model"
-#     conf.epochs = 100
+if conf.dataset == "toy_grid":
+    conf.model = "toy_model"
+    conf.epochs = 128
 if conf.model == "ClipViT":
     # conf.epochs = 5
     conf.lr = 1e-5
@@ -342,6 +347,10 @@ elif conf.dataset.startswith("celebA"):
         spur_feat=spur_feat,
         inv_spur_feat=inv_spur_feat
     )
+elif conf.dataset == "camelyon":
+    source_train, source_val, target_train, target_val, target_test = get_camelyon_datasets(
+        transform=model_transform
+    )
 elif conf.dataset == "multi_nli":
     source_train, source_val, target_train, target_val, target_test = get_multi_nli_datasets(
         mix_rate=conf.mix_rate,
@@ -455,63 +464,7 @@ else:
     raise ValueError(f"Loss type {conf.loss_type} not supported")
 
 
-# In[ ]:
-
-
-def compute_accs(logits: torch.Tensor, gl: torch.Tensor):
-    with torch.no_grad():
-        acc = torch.zeros(conf.heads)
-        acc_alt = torch.zeros(conf.heads)
-        for i in range(conf.heads):
-            acc[i] += ((logits[:, i] > 0) == gl[:, 1-alt_index].flatten()).to(torch.float32).mean().item()
-            acc_alt[i] += ((logits[:, i] > 0) == gl[:, alt_index].flatten()).to(torch.float32).mean().item()
-    return acc, acc_alt
-
-
-# In[ ]:
-
-
-def get_acts_and_labels(model: nn.Module, loader: DataLoader):
-    activations = []
-    labels = []
-    model = model_builder()
-    model = model.to(conf.device)
-    for x, y, gl in tqdm(loader):
-        x, y, gl = x.to(conf.device), y.to(conf.device), gl.to(conf.device)
-        acts = model(x)
-        activations.append((acts.detach().cpu()))
-        labels.append(gl)
-    activations = torch.cat(activations, dim=0).squeeze()
-    labels = torch.cat(labels, dim=0)
-    labels = labels.squeeze()
-    return activations, labels
-
-
-# In[ ]:
-
-
-def plot_activations(model: nn.Module, loader: DataLoader):
-    model.eval()
-    with torch.no_grad():
-        activations, labels = get_acts_and_labels(model, loader)
-    pca = PCA(n_components=2)
-    pca.fit(activations)
-    activations_pca = pca.transform(activations)
-
-    # Create a figure with two subplots side by side
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-    # Plot first label
-    scatter1 = ax1.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 0].to('cpu'), cmap="viridis")
-    ax1.set_title('Label 0')
-
-    # Plot second label
-    scatter2 = ax2.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 1].to('cpu'), cmap="viridis")
-    ax2.set_title('Label 1')
-
-    fig.tight_layout()
-    return fig
-
+# # Plot Activations
 
 # In[ ]:
 
@@ -521,31 +474,7 @@ if is_notebook() and conf.plot_activations:
     model = model_builder()
     model = model.to(conf.device)
     activations, labels = get_acts_and_labels(model, target_test_loader)
-
-
-# In[ ]:
-
-
-from sklearn.decomposition import PCA
-if is_notebook() and conf.plot_activations:
-    pca = PCA(n_components=2)
-    pca.fit(activations)
-    activations_pca = pca.transform(activations)
-
-    # Create a figure with two subplots side by side
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-    # Plot first label
-    scatter1 = ax1.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 0].to('cpu'), cmap="viridis")
-    ax1.set_title('Label 0')
-
-    # Plot second label
-    scatter2 = ax2.scatter(activations_pca[:, 0], activations_pca[:, 1], c=labels[:, 1].to('cpu'), cmap="viridis")
-    ax2.set_title('Label 1')
-
-    plt.tight_layout()
-    plt.savefig(f"{exp_dir}/activations_pretrain.png")
-    plt.show()
+    activations_pca, pca = transform_activations(activations)
 
 
 # In[ ]:
@@ -610,9 +539,11 @@ if is_notebook() and conf.plot_activations:
 
 
 if not is_notebook() and conf.plot_activations:
-    fig = plot_activations(net.backbone, target_test_loader)
+    fig = plot_activations(model=net.backbone, loader=target_test_loader, device=conf.device)
     fig.savefig(f"{exp_dir}/activations_pretrain.png")
 
+
+# # Train
 
 # In[ ]:
 
@@ -639,6 +570,15 @@ def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: b
 # In[ ]:
 
 
+from torch.utils.tensorboard import SummaryWriter
+
+writer = SummaryWriter(log_dir=conf.exp_dir)
+
+
+# In[ ]:
+
+
+# TODO: change diciotary values to source loss, target loss
 metrics = defaultdict(list)
 target_iter = iter(target_train_loader)
 if conf.freeze_heads:
@@ -653,6 +593,7 @@ for epoch in range(conf.epochs):
         logits = net(x)
         losses = compute_src_losses(logits, y, gl, conf.binary, conf.use_group_labels)
         xent = sum(losses)
+        writer.add_scalar("train/source_loss", xent.item(), epoch * len(source_train_loader) + batch_idx)
         # target loss 
         try: 
             target_x, target_y, target_gl = next(target_iter)
@@ -661,11 +602,13 @@ for epoch in range(conf.epochs):
             target_x, target_y, target_gl = next(target_iter)
         target_x, target_y, target_gl = to_device(target_x, target_y, target_gl, conf.device)
         target_logits = net(target_x)
-        repulsion_loss = loss_fn(target_logits)
+        target_loss = loss_fn(target_logits)
+        writer.add_scalar("train/target_loss", target_loss.item(), epoch * len(target_train_loader) + batch_idx)
+        writer.add_scalar("train/weighted_target_loss", conf.aux_weight * target_loss.item(), epoch * len(target_train_loader) + batch_idx)
         if conf.freeze_heads and epoch < conf.head_1_epochs:
-            repulsion_loss = torch.tensor(0.0, device=conf.device)
+            target_loss = torch.tensor(0.0, device=conf.device)
         # full loss 
-        full_loss = conf.source_weight * xent + conf.aux_weight * repulsion_loss
+        full_loss = conf.source_weight * xent + conf.aux_weight * target_loss
         opt.zero_grad()
         full_loss.backward()
         opt.step()
@@ -673,23 +616,25 @@ for epoch in range(conf.epochs):
             scheduler.step()
 
         metrics[f"xent"].append(xent.item())
-        metrics[f"repulsion_loss"].append(repulsion_loss.item())
+        metrics[f"repulsion_loss"].append(target_loss.item())
     # Compute loss on target validation set (used for model selection)
     # and aggregate metrics over the entire test set (should not really be using)
     if (epoch + 1) % 1 == 0:
         net.eval()
         # compute repulsion loss on target validation set (used for model selection)
-        repulsion_losses_val = []
-        weighted_repulsion_losses_val = []
+        target_losses_val = []
+        weighted_target_losses_val = []
         with torch.no_grad():
             for x, y, gl in tqdm(target_val_loader, desc="Target val"):
                 x, y, gl = to_device(x, y, gl, conf.device)
                 logits_val = net(x)
-                repulsion_loss_val = loss_fn(logits_val)
-                repulsion_losses_val.append(repulsion_loss_val.item())
-                weighted_repulsion_losses_val.append(conf.aux_weight * repulsion_loss_val.item())
-        metrics[f"target_val_repulsion_loss"].append(np.mean(repulsion_losses_val))
-        metrics[f"target_val_weighted_repulsion_loss"].append(np.mean(weighted_repulsion_losses_val))
+                target_loss_val = loss_fn(logits_val)
+                target_losses_val.append(target_loss_val.item())
+                weighted_target_losses_val.append(conf.aux_weight * target_loss_val.item())
+        metrics[f"target_val_repulsion_loss"].append(np.mean(target_losses_val))
+        metrics[f"target_val_weighted_repulsion_loss"].append(np.mean(weighted_target_losses_val))
+        writer.add_scalar("val/target_loss", np.mean(target_losses_val), epoch)
+        writer.add_scalar("val/weighted_target_loss", np.mean(weighted_target_losses_val), epoch)
         # compute xent on source validation set
         xent_val = []
         with torch.no_grad():
@@ -699,9 +644,11 @@ for epoch in range(conf.epochs):
                 losses_val = compute_src_losses(logits_val, y, gl, conf.binary, conf.use_group_labels)
                 xent_val.append(sum(losses_val).item())
         metrics[f"source_val_xent"].append(np.mean(xent_val))
-        metrics[f"val_loss"].append(np.mean(repulsion_losses_val) + np.mean(xent_val))
-        metrics[f"val_weighted_loss"].append(np.mean(weighted_repulsion_losses_val) + np.mean(xent_val))
-
+        metrics[f"val_loss"].append(np.mean(target_losses_val) + np.mean(xent_val))
+        metrics[f"val_weighted_loss"].append(np.mean(weighted_target_losses_val) + np.mean(xent_val))
+        writer.add_scalar("val/source_loss", np.mean(xent_val), epoch)
+        writer.add_scalar("val/val_loss", np.mean(target_losses_val) + np.mean(xent_val), epoch)
+        writer.add_scalar("val/weighted_val_loss", np.mean(weighted_target_losses_val) + np.mean(xent_val), epoch)
         # compute accuracy over target test set (used to evaluate actual performance)
         total_correct = torch.zeros(conf.heads)
         total_correct_alt = torch.zeros(conf.heads)
@@ -721,6 +668,8 @@ for epoch in range(conf.epochs):
         for i in range(conf.heads):
             metrics[f"epoch_acc_{i}"].append((total_correct[i] / total_samples).item())
             metrics[f"epoch_acc_{i}_alt"].append((total_correct_alt[i] / total_samples).item())
+            writer.add_scalar(f"val/acc_{i}", (total_correct[i] / total_samples).item(), epoch)
+            writer.add_scalar(f"val/acc_{i}_alt", (total_correct_alt[i] / total_samples).item(), epoch)
         
         print(f"Epoch {epoch + 1} Test Accuracies:")
         # print validation losses
@@ -734,7 +683,9 @@ for epoch in range(conf.epochs):
         
         # plot activations 
         if conf.plot_activations:   
-            fig = plot_activations(net.backbone, target_test_loader)
+            fig = plot_activations(
+                model=net.backbone, loader=target_test_loader, device=conf.device
+            )
             fig.savefig(f"{exp_dir}/activations_{epoch}.png")
             plt.close()
         
