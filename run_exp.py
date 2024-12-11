@@ -122,7 +122,7 @@ class Config():
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
     max_length: int = 128
-    num_workers: int = 6
+    num_workers: int = 4
     freeze_heads: bool = False
     head_1_epochs: int = 5
     dataset_length: Optional[int] = None
