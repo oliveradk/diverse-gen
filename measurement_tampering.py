@@ -85,33 +85,34 @@ from dataclasses import dataclass
 @dataclass 
 class Config: 
     loss_type: LossType = LossType.TOPK
-    lr=2e-5
-    weight_decay=2e-2
-    epochs=5
-    scheduler="cosine"
-    frac_warmup=0.05
-    num_epochs=5
-    effective_batch_size=32
-    forward_batch_size=32
-    micro_batch_size=4
-    use_visible_labels=True 
-    use_negative_visible=False
-    all_measurements=False
-    seed=42
-    max_length=1024
-    dataset_len=256
-    binary=True
-    heads=2
-    train=True
-    freeze_model=False
-    load_prior_probe=False
-    source_weight=1.0
-    aux_weight=1.0
-    mix_rate_lower_bound=0.1
-    use_group_labels=False
-    num_workers=2
-    device="cuda" if torch.cuda.is_available() else "cpu"
-    exp_dir=f"output/mtd/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    dataset: str = "redwoodresearch/diamonds-seed0"
+    lr: float = 2e-5
+    weight_decay: float = 2e-2
+    epochs: int = 5
+    scheduler: str = "cosine"
+    frac_warmup: float = 0.05
+    num_epochs: int = 5
+    effective_batch_size: int = 32
+    forward_batch_size: int = 32
+    micro_batch_size: int = 4
+    use_visible_labels: bool = True 
+    use_negative_visible: bool = False
+    all_measurements: bool = False
+    seed: int = 42
+    max_length: int = 1024
+    dataset_len: int = None
+    binary: bool = True
+    heads: int = 2
+    train: bool = True
+    freeze_model: bool = False
+    load_prior_probe: bool = False
+    source_weight: float = 1.0
+    aux_weight: float = 1.0
+    mix_rate_lower_bound: float = 0.1
+    use_group_labels: bool = False
+    num_workers: int = 2
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    exp_dir: str = f"output/mtd/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
 def post_init(conf, overrride_keys):
     pass
@@ -185,7 +186,7 @@ tokenizer.pad_token = tokenizer.eos_token
 
 from datasets import load_dataset
 
-dataset = load_dataset("redwoodresearch/diamonds-seed0")
+dataset = load_dataset(conf.dataset)
 
 
 # In[ ]:
