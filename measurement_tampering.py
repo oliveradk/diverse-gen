@@ -48,6 +48,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 from collections import defaultdict
+from typing import Optional
 
 import numpy as np
 import torch
@@ -100,7 +101,7 @@ class Config:
     all_measurements: bool = False
     seed: int = 42
     max_length: int = 1024
-    dataset_len: int = None
+    dataset_len: Optional[int] = None
     binary: bool = True
     heads: int = 2
     train: bool = True
@@ -110,7 +111,7 @@ class Config:
     aux_weight: float = 1.0
     mix_rate_lower_bound: float = 0.1
     use_group_labels: bool = False
-    num_workers: int = 2
+    num_workers: int = 1
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     exp_dir: str = f"output/mtd/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
@@ -192,25 +193,25 @@ dataset = load_dataset(conf.dataset)
 # In[ ]:
 
 
-dataset_dir = "data/diamonds/"
-os.makedirs(dataset_dir, exist_ok=True)
-def encode_dataset(examples):
-    return tokenizer(
-        examples['text'],
-        max_length=conf.max_length,
-        padding='max_length', 
-        truncation=True,
-        return_tensors='pt'
-    )
+# dataset_dir = "data/diamonds/"
+# os.makedirs(dataset_dir, exist_ok=True)
+# def encode_dataset(examples):
+#     return tokenizer(
+#         examples['text'],
+#         max_length=conf.max_length,
+#         padding='max_length', 
+#         truncation=True,
+#         return_tensors='pt'
+#     )
 
-dataset = dataset.map(
-    encode_dataset,
-    batched=True,
-    cache_file_names={
-        split: f"{dataset_dir}/seed0_{split}_{conf.dataset_len}_{conf.max_length}.arrow"
-        for split in dataset.keys()
-    }
-)
+# dataset = dataset.map(
+#     encode_dataset,
+#     batched=True,
+#     # cache_file_names={
+#     #     split: f"{dataset_dir}/seed0_{split}_{conf.dataset_len}_{conf.max_length}.arrow"
+#     #     for split in dataset.keys()
+#     # }
+# )
 
 
 # In[ ]:
@@ -219,6 +220,7 @@ dataset = dataset.map(
 class DiamondsDataset(Dataset):
     def __init__(self, dataset, max_length=1024, negative_visible=False, all_measurements=False):
         self.dataset = dataset
+        self.tokenizer = tokenizer
         self.max_length = max_length
         self.negative_visible = negative_visible
         self.all_measurements = all_measurements
@@ -227,21 +229,21 @@ class DiamondsDataset(Dataset):
         self.ground_truth = torch.tensor(self.dataset['is_correct'])
         self.is_trusted = torch.tensor(self.dataset['is_clean'])
 
-        # self.encodings = tokenizer(
-        #     self.dataset['text'],
-        #     max_length=self.max_length,
-        #     padding='max_length',
-        #     truncation=True,
-        #     return_tensors='pt'
-        # )
+        self.encodings = tokenizer(
+            self.dataset['text'],
+            max_length=self.max_length,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
     
     def __len__(self):
         return len(self.dataset)
     
     def __getitem__(self, idx):
         encoding = {
-            "input_ids": torch.tensor(self.dataset['input_ids'][idx]),
-            "attention_mask": torch.tensor(self.dataset['attention_mask'][idx]), 
+            "input_ids": self.encodings['input_ids'][idx],
+            "attention_mask": self.encodings['attention_mask'][idx], 
         }
 
         # labels
@@ -605,6 +607,7 @@ for epoch in range(conf.epochs):
         visible_loss = torch.tensor(0.0)
         if conf.aux_weight > 0 or conf.use_visible_labels:
             if batch_idx % (conf.effective_batch_size // conf.micro_batch_size) == 0:
+                print("computing target logits")
                 target_logits_ls = []
                 try: 
                     target_batch = next(target_iter)
@@ -615,6 +618,7 @@ for epoch in range(conf.epochs):
                 with torch.no_grad():
                     target_logits_ls.append(net(target_batch).detach())
                 target_logits = torch.cat(target_logits_ls, dim=0)
+                print("computed target logits")
             # compute target logits with grad on micro batch
             micro_batch_idx = batch_idx % (conf.effective_batch_size // conf.micro_batch_size)
             micro_slice = slice(micro_batch_idx * conf.micro_batch_size, (micro_batch_idx + 1) * conf.micro_batch_size)
