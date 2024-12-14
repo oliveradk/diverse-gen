@@ -68,7 +68,7 @@ class ACELoss(t.nn.Module):
         binary: bool = False,
         mode: Literal['exp', 'prob', 'topk'] = 'exp',
         inbalance_ratio: bool = False,
-        mix_rate: Optional[float] = 0.5,
+        mix_rate: Optional[float] = None,
         group_mix_rates: Optional[dict[tuple[int, ...], float]] = None,
         pseudo_label_all_groups: bool = False,
         device: str = "cpu"
