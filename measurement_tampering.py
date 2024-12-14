@@ -86,7 +86,8 @@ from dataclasses import dataclass
 @dataclass 
 class Config: 
     loss_type: LossType = LossType.TOPK
-    dataset: str = "redwoodresearch/diamonds-seed0"
+    one_sided_ace: bool = True
+    dataset: str = "diamonds-seed0"
     lr: float = 2e-5
     weight_decay: float = 2e-2
     epochs: int = 5
@@ -96,7 +97,7 @@ class Config:
     effective_batch_size: int = 32
     forward_batch_size: int = 32
     micro_batch_size: int = 4
-    use_visible_labels: bool = True 
+    use_visible_labels: bool = False
     use_negative_visible: bool = False
     all_measurements: bool = False
     seed: int = 42
@@ -187,7 +188,7 @@ tokenizer.pad_token = tokenizer.eos_token
 
 from datasets import load_dataset
 
-dataset = load_dataset(conf.dataset)
+dataset = load_dataset(f"redwoodresearch/{conf.dataset}")
 
 
 # In[ ]:
@@ -398,13 +399,19 @@ if conf.loss_type == LossType.DIVDIS:
 elif conf.loss_type == LossType.ERM:
     loss_fn = PassThroughLoss()
 elif conf.loss_type == LossType.TOPK:
+    if conf.one_sided_ace:
+        group_mix_rates = {(0, 1): conf.mix_rate_lower_bound}
+        mix_rate = None
+    else:
+        mix_rate = conf.mix_rate_lower_bound
+        group_mix_rates = None
     loss_fn = ACELoss(
         heads=2, 
         classes=2, 
         binary=True, 
         mode="topk", 
-        group_mix_rates={(0, 1): conf.mix_rate_lower_bound},  # TODO: should ignore visible labels
-        # mix_rate=conf.mix_rate_lower_bound, 
+        group_mix_rates=group_mix_rates,  # TODO: should ignore visible labels
+        mix_rate=mix_rate,
         pseudo_label_all_groups=False, 
         device=conf.device
     )
@@ -633,11 +640,6 @@ for epoch in range(conf.epochs):
             ])
 
             div_loss, visible_loss = compute_target_loss(new_target_logits, target_y, target_gl, loss_fn, conf.loss_type, conf.use_visible_labels)
-            
-            # compute target acc 
-            for i in range(conf.heads):
-                target_batch_corrects[(i, "y")] += compute_corrects(new_target_logits, i, target_y, conf.binary) 
-                target_batch_corrects[(i, "gl")] += compute_corrects(new_target_logits, i, target_gl[:, 1], conf.binary)
 
         # full loss (on micro batch)
         full_loss = conf.source_weight * xent + conf.aux_weight * div_loss + visible_loss   
@@ -649,6 +651,11 @@ for epoch in range(conf.epochs):
             if scheduler is not None:
                 scheduler.step()
             opt.zero_grad()
+
+            # compute target acc 
+            for i in range(conf.heads):
+                target_batch_corrects[(i, "y")] += compute_corrects(new_target_logits, i, target_y, conf.binary) 
+                target_batch_corrects[(i, "gl")] += compute_corrects(new_target_logits, i, target_gl[:, 1], conf.binary)
 
             source_batch_loss = source_batch_loss / conf.effective_batch_size
             # compute batch metrics 
@@ -735,10 +742,4 @@ import json
 with open(f"{conf.exp_dir}/metrics.json", "w") as f:
     json.dump(metrics, f, indent=4)
     
-
-
-# In[ ]:
-
-
-conf.aux_weight
 
