@@ -588,6 +588,13 @@ if not conf.train:
 # In[ ]:
 
 
+def train_target(conf: Config):
+    return conf.aux_weight > 0 or conf.use_visible_labels
+
+
+# In[ ]:
+
+
 # dataloader with effective batch size, then iterate over micro batches within batch 
 target_iter = iter(target_train_loader)
 target_batch = None
@@ -612,7 +619,7 @@ for epoch in range(conf.epochs):
         # compute target logits with no grad on forward batch 
         div_loss = torch.tensor(0.0)
         visible_loss = torch.tensor(0.0)
-        if conf.aux_weight > 0 or conf.use_visible_labels:
+        if train_target(conf):
             if batch_idx % (conf.effective_batch_size // conf.micro_batch_size) == 0:
                 print("computing target logits")
                 target_logits_ls = []
@@ -653,9 +660,10 @@ for epoch in range(conf.epochs):
             opt.zero_grad()
 
             # compute target acc 
-            for i in range(conf.heads):
-                target_batch_corrects[(i, "y")] += compute_corrects(new_target_logits, i, target_y, conf.binary) 
-                target_batch_corrects[(i, "gl")] += compute_corrects(new_target_logits, i, target_gl[:, 1], conf.binary)
+            if train_target(conf):
+                for i in range(conf.heads):
+                    target_batch_corrects[(i, "y")] += compute_corrects(new_target_logits, i, target_y, conf.binary) 
+                    target_batch_corrects[(i, "gl")] += compute_corrects(new_target_logits, i, target_gl[:, 1], conf.binary)
 
             source_batch_loss = source_batch_loss / conf.effective_batch_size
             # compute batch metrics 
@@ -670,7 +678,7 @@ for epoch in range(conf.epochs):
             
             for i in range(conf.heads):
                 writer.add_scalar(f"train/source_acc_{i}", source_batch_corrects[i] / conf.effective_batch_size, epoch * effective_num_batches + effective_batch_idx)
-                if conf.aux_weight > 0 or conf.use_visible_labels:
+                if train_target(conf):
                     for label in ["y", "gl"]:
                         writer.add_scalar(f"train/target_acc_{i}_{label}", target_batch_corrects[(i, label)] / conf.effective_batch_size, epoch * effective_num_batches + effective_batch_idx)
             source_batch_loss = 0
