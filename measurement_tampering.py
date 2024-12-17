@@ -31,20 +31,6 @@ if not is_notebook():
 # In[ ]:
 
 
-# TODO: train from scratch from different datasets
-
-
-# In[ ]:
-
-
-# TODO: separete target labeled and unlabeled loss 
-# run experiment using source and target visisible (no unlabeled loss) # all vs any
-# run experiment using source and target visible, with unlabeled loss # all vs any
-
-
-# In[ ]:
-
-
 import os
 os.chdir("/nas/ucb/oliveradk/diverse-gen")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -88,14 +74,14 @@ from utils.utils import batch_size, to_device
 
 
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 @dataclass 
 class Config: 
     loss_type: LossType = LossType.TOPK
     one_sided_ace: bool = True
-    model: str = "codegen-350M-mono-measurement_pred-diamonds-seed4"
-    dataset: str = "diamonds-seed4"
-    lr: float = 2e-5
+    model: str = "codegen-350M-mono-measurement_pred-diamonds-seed0"
+    dataset: str = "diamonds-seed0"
+    lr: float = 2e-5 
     weight_decay: float = 2e-2
     epochs: int = 5
     scheduler: str = "cosine"
@@ -104,12 +90,9 @@ class Config:
     effective_batch_size: int = 32
     forward_batch_size: int = 32
     micro_batch_size: int = 4
-    use_visible_labels: bool = False
-    use_negative_visible: bool = False
-    all_measurements: bool = False
     seed: int = 42
     max_length: int = 1024
-    dataset_len: Optional[int] = 256
+    dataset_len: Optional[int] = None
     binary: bool = True
     heads: int = 2
     train: bool = True
@@ -118,7 +101,8 @@ class Config:
     source_weight: float = 1.0
     aux_weight: float = 1.0
     mix_rate_lower_bound: float = 0.1
-    use_group_labels: bool = False
+    source_labels: Optional[list[str| None]] = None # field(default_factory=lambda: None)
+    target_labels: Optional[list[str| None]] = None # field(default_factory=lambda: None) # None, all_sensors
     bootstrap_eval: bool = True
     n_bootstrap_samples: int = 100
     num_workers: int = 1
@@ -203,37 +187,11 @@ dataset = load_dataset(f"redwoodresearch/{conf.dataset}")
 # In[ ]:
 
 
-# dataset_dir = "data/diamonds/"
-# os.makedirs(dataset_dir, exist_ok=True)
-# def encode_dataset(examples):
-#     return tokenizer(
-#         examples['text'],
-#         max_length=conf.max_length,
-#         padding='max_length', 
-#         truncation=True,
-#         return_tensors='pt'
-#     )
-
-# dataset = dataset.map(
-#     encode_dataset,
-#     batched=True,
-#     # cache_file_names={
-#     #     split: f"{dataset_dir}/seed0_{split}_{conf.dataset_len}_{conf.max_length}.arrow"
-#     #     for split in dataset.keys()
-#     # }
-# )
-
-
-# In[ ]:
-
-
-class DiamondsDataset(Dataset):
-    def __init__(self, dataset, max_length=1024, negative_visible=False, all_measurements=False):
+class MeasurementDataset(Dataset):
+    def __init__(self, dataset, max_length=1024):
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.negative_visible = negative_visible
-        self.all_measurements = all_measurements
 
         self.measurements = torch.tensor(self.dataset['measurements'])
         self.ground_truth = torch.tensor(self.dataset['is_correct'])
@@ -257,22 +215,13 @@ class DiamondsDataset(Dataset):
         }
 
         # labels
-        label = self.ground_truth[idx]
-        tampering = torch.all(self.measurements[idx]) if self.all_measurements else torch.any(self.measurements[idx])
-        
-        # visible if failed tampering (some but not all measurements)
-        failed_tampering = torch.any(self.measurements[idx]) & ~torch.all(self.measurements[idx])
-        visible = failed_tampering 
-        # visible if negative (implies no tampering b/c agent has no incentive to tamper)
-        if self.negative_visible:
-            negative = torch.tensor(not torch.any(self.measurements[idx]))
-            visible = torch.logical_or(visible, negative)
-        
-        group_labels = torch.stack((label, tampering, visible))
-
+        gt = self.ground_truth[idx]
+        all_sensors = torch.all(self.measurements[idx])
+        sensors_agree = torch.all(self.measurements[idx] == self.measurements[idx][0]) 
+        group_labels = torch.stack((gt, all_sensors, sensors_agree))
 
         # set labels to floats 
-        label = label.to(torch.float32)
+        label = gt.to(torch.float32)
         group_labels = group_labels.to(torch.float32)
         
         return encoding, label, group_labels
@@ -349,11 +298,17 @@ print(f"test: tampering {test_tampering_rate:.2f}, fake positive {test_fake_posi
 # In[ ]:
 
 
-source_train_ds = DiamondsDataset(dataset["source_train"], conf.max_length, conf.use_negative_visible, conf.all_measurements)
-source_val_ds = DiamondsDataset(dataset["source_val"], conf.max_length, conf.use_negative_visible, conf.all_measurements)
-target_train_ds = DiamondsDataset(dataset["target_train"], conf.max_length, conf.use_negative_visible, conf.all_measurements)
-target_val_ds = DiamondsDataset(dataset["target_val"], conf.max_length, conf.use_negative_visible, conf.all_measurements)
-test_ds = DiamondsDataset(dataset["test"], conf.max_length, conf.use_negative_visible, conf.all_measurements)
+# TODO: fix acc computations which use fixed indices
+
+
+# In[ ]:
+
+
+source_train_ds = MeasurementDataset(dataset["source_train"], conf.max_length)
+source_val_ds = MeasurementDataset(dataset["source_val"], conf.max_length)
+target_train_ds = MeasurementDataset(dataset["target_train"], conf.max_length)
+target_val_ds = MeasurementDataset(dataset["target_val"], conf.max_length)
+test_ds = MeasurementDataset(dataset["test"], conf.max_length)
 
 
 # In[ ]:
@@ -376,7 +331,7 @@ class MeasurementPredBackbone(nn.Module):
 
 
 pred_model = MeasurementPredBackbone(pretrained_model).to(conf.device)
-net = MultiHeadBackbone(pred_model, n_heads=2, feature_dim=1024, classes=1).to(conf.device)
+net = MultiHeadBackbone(pred_model, n_heads=conf.heads, feature_dim=1024, classes=1).to(conf.device)
 
 if conf.freeze_model:
     for param in net.backbone.parameters():
@@ -415,7 +370,7 @@ elif conf.loss_type == LossType.TOPK:
         mix_rate = conf.mix_rate_lower_bound
         group_mix_rates = None
     loss_fn = ACELoss(
-        heads=2, 
+        heads=conf.heads, 
         classes=2, 
         binary=True, 
         mode="topk", 
@@ -429,9 +384,24 @@ elif conf.loss_type == LossType.TOPK:
 # In[ ]:
 
 
-def compute_src_losses(logits, y, gl, binary, use_group_labels):
+from typing import Optional, Literal
+def compute_src_losses(
+    logits, y, gl, binary,
+    source_labels: Optional[list[Literal["all_sensors", "sensors_agree", None]]] = None
+):
     logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
-    labels = torch.cat([y, y], dim=-1) if not use_group_labels else gl
+    if source_labels is None:
+        labels = torch.cat([y, y], dim=-1)
+    else:
+        head_labels = []
+        for i in range(conf.heads):
+            if source_labels[i] == "all_sensors":
+                head_labels.append(gl[:, 1])
+            elif source_labels[i] == "sensors_agree":
+                head_labels.append(gl[:, 2])
+            else:
+                head_labels.append(y)
+        labels = torch.cat(head_labels, dim=-1)
     labels_chunked = torch.chunk(labels, conf.heads, dim=-1)
     if binary:
         losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.squeeze().to(torch.float32)) for logit, y in zip(logits_chunked, labels_chunked)]
@@ -486,53 +456,46 @@ def in_slice(idx, slice):
 # In[ ]:
 
 
-# experiments to try: 
-## using failed tampering instances as positive tampering (i.e. modify group labels to add a third, which is basically (visible), and the heads should be trained to ouptut the group labels on those)
-## use labels on negative examples (we know no tampering)
-
-
-# In[ ]:
-
-
-def compute_visible_target_loss(visible_logits, visible_gl):    
-
+def compute_labeled_target_loss(
+        logits, gl, target_labels: list[Literal["all_sensors", "sensors_agree", None]]
+    ):    
     # visible logits chunked
-    logits_chunked = torch.chunk(visible_logits, conf.heads, dim=-1)
+    logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
 
-    # visible group labels chunked
-    gl_chunked = torch.chunk(visible_gl[:, :2], conf.heads, dim=-1)
-    
-    # compute losses for each head
-    losses = [
-        F.binary_cross_entropy_with_logits(
-            logit.squeeze(), y_i.squeeze().to(torch.float32)
-        )
-        for logit, y_i in zip(logits_chunked, gl_chunked)
-    ]
+    losses = []
+    for i in range(conf.heads):
+        if target_labels[i] is None: # no label for this head
+            continue
+        if target_labels[i] == "all_sensors":
+            y_i = gl[:, 1]
+        elif target_labels[i] == "sensors_agree":
+            y_i = gl[:, 2]
+        losses.append(F.binary_cross_entropy_with_logits(logits_chunked[i].squeeze(), y_i.squeeze().to(torch.float32)))
+    if len(losses) == 0:
+        return torch.tensor(0.0)
     return sum(losses)
 
 
 # In[ ]:
 
 
-def compute_target_loss(logits, y, gl, loss_fn, loss_type, use_visible_labels): 
-    if not use_visible_labels:
-        return loss_fn(logits), torch.tensor(0.0)
-    
-    visible_mask = gl[:, 2].bool()
-    
-    # compute div loss
-    if loss_type == LossType.TOPK: 
-        non_visible_logits = logits[~visible_mask]
-        div_loss = loss_fn(non_visible_logits)
-    else: 
-        div_loss = loss_fn(logits)
+def compute_target_loss(
+        logits, y, gl, loss_fn, loss_type, 
+        target_labels: Optional[list[Literal["all_sensors", "sensors_agree", None]]] = None
+    ): 
+    div_loss = loss_fn(logits)
+    labeled_loss = torch.tensor(0.0)    
+    if target_labels is not None:
+        labeled_loss = compute_labeled_target_loss(logits, gl, target_labels)
+    return div_loss, labeled_loss
 
-    visible_loss = torch.tensor(0.0)
-    if any(visible_mask):
-        visible_loss = compute_visible_target_loss(logits[visible_mask], gl[visible_mask])
 
-    return div_loss, visible_loss
+# In[ ]:
+
+
+# don't worry about acc boostrapping 
+# only bootstrap auroc 
+# always return auroc's as list, so we can compute mean and std (even if length 1)
 
 
 # In[ ]:
@@ -541,14 +504,18 @@ def compute_target_loss(logits, y, gl, loss_fn, loss_type, use_visible_labels):
 def eval(net, loader, conf, bootstrap=False, n_bootstrap_samples=100, bootstrap_seed=0, fraction=0.5): 
     net.eval()
 
-    head_accs = []
-    head_accs_alt = []
-    head_aurocs = []
     total_correct = torch.zeros(conf.heads)
-    total_correct_alt = torch.zeros(conf.heads)
+    total_correct_groups = {
+        "all_sensors": torch.zeros(conf.heads),
+        "sensors_agree": torch.zeros(conf.heads)
+    }
     total_samples = 0
     all_preds = [[] for _ in range(conf.heads)]
     all_labels = []
+    all_group_labels = {
+        "all_sensors": [],
+        "sensors_agree": []
+    }
 
     with torch.no_grad():
         for test_batch in tqdm(loader, desc="Target test"):
@@ -559,80 +526,89 @@ def eval(net, loader, conf, bootstrap=False, n_bootstrap_samples=100, bootstrap_
 
             # Store labels for AUROC
             all_labels.extend(test_y.cpu().numpy())
+            all_group_labels["all_sensors"].extend(test_gl[:, 1].cpu().numpy())
+            all_group_labels["sensors_agree"].extend(test_gl[:, 2].cpu().numpy())
             
             for i in range(conf.heads):
                 total_correct[i] += compute_corrects(test_logits, i, test_y, conf.binary)
-                total_correct_alt[i] += compute_corrects(test_logits, i, test_gl[:, 1], conf.binary)
+                total_correct_groups["all_sensors"][i] += compute_corrects(test_logits, i, test_gl[:, 1], conf.binary)
+                total_correct_groups["sensors_agree"][i] += compute_corrects(test_logits, i, test_gl[:, 2], conf.binary)
                 probs = torch.sigmoid(test_logits[:, i]).cpu().numpy()
                 all_preds[i].extend(probs)
 
-    # Convert lists to numpy arrays for easier manipulation
+    # Convert lists to numpy arrays
     all_labels = np.array(all_labels)
     all_preds = [np.array(preds) for preds in all_preds]
+    all_group_labels = {k: np.array(v) for k, v in all_group_labels.items()}
 
+    # Compute point estimates for accuracies
+    head_accs = [(total_correct[i] / total_samples).item() for i in range(conf.heads)]
+    head_accs_groups = {
+        group: [(total_correct_groups[group][i] / total_samples).item() for i in range(conf.heads)]
+        for group in ["all_sensors", "sensors_agree"]
+    }
+
+    # Compute AUROC (with or without bootstrapping)
     if not bootstrap:
-        # Original non-bootstrapped computation
-        head_aurocs = [roc_auc_score(all_labels, preds) for preds in all_preds]
-        head_accs = [(total_correct[i] / total_samples).item() for i in range(conf.heads)]
-        head_accs_alt = [(total_correct_alt[i] / total_samples).item() for i in range(conf.heads)]
-        
-        # Return point estimates without confidence intervals
-        return head_accs, head_accs_alt, head_aurocs
+        # Single AUROC computation per head, wrapped in a list
+        head_aurocs = [[roc_auc_score(all_labels, preds)] for preds in all_preds]
     else:
-        # Initialize bootstrap results
-        bootstrap_aurocs = [[] for _ in range(conf.heads)]
-        bootstrap_accs = [[] for _ in range(conf.heads)]
-        bootstrap_accs_alt = [[] for _ in range(conf.heads)]
-        
-        # Set random seed for reproducibility
+        # Bootstrap AUROC computation
+        head_aurocs = [[] for _ in range(conf.heads)]
         np_gen = np.random.default_rng(bootstrap_seed)
+
+        correct_indices = np.where(all_labels == 1)[0]
+        incorrect_indices = np.where(all_labels == 0)[0]
+        correct_preds = [
+            all_preds[i][correct_indices] for i in range(conf.heads)
+        ]
+        incorrect_preds = [
+            all_preds[i][incorrect_indices] for i in range(conf.heads)
+        ]
         
-        # Perform bootstrap sampling
-        n_samples = round(len(all_labels) * fraction)
         for _ in range(n_bootstrap_samples):
-            # Sample indices with replacement
-            indices = np_gen.choice(n_samples, size=n_samples)
-            
-            # Compute metrics for this bootstrap sample
+            # split into corrects vs incorrects (based on y label)
             for i in range(conf.heads):
-                # AUROC
+                correct_preds_sampled = np_gen.choice(correct_preds[i], size=round(len(correct_preds[i]) * fraction))
+                incorrect_preds_sampled = np_gen.choice(incorrect_preds[i], size=round(len(incorrect_preds[i]) * fraction))
+                gt = np.concatenate([np.ones_like(correct_preds_sampled), np.zeros_like(incorrect_preds_sampled)])
+                scores = np.concatenate([correct_preds_sampled, incorrect_preds_sampled])
                 try:
-                    bootstrap_auroc = roc_auc_score(all_labels[indices], all_preds[i][indices])
+                    bootstrap_auroc = roc_auc_score(gt, scores)
                 except ValueError:
                     bootstrap_auroc = np.nan
-                bootstrap_aurocs[i].append(bootstrap_auroc)
-                
-                # Accuracy metrics
-                bootstrap_acc = (total_correct[i] * indices.size / total_samples).item()
-                bootstrap_acc_alt = (total_correct_alt[i] * indices.size / total_samples).item()
-                bootstrap_accs[i].append(bootstrap_acc)
-                bootstrap_accs_alt[i].append(bootstrap_acc_alt)
-        
-        # Compute means and standard deviations
-        return bootstrap_accs, bootstrap_accs_alt, bootstrap_aurocs
+                head_aurocs[i].append(bootstrap_auroc)
+    
+    return head_accs, head_accs_groups, head_aurocs
 
 
 # In[ ]:
 
 
 if not conf.train:
-    head_accs, head_accs_alt, head_aurocs = eval(
+    metrics = {}
+    head_accs, head_accs_groups, head_aurocs = eval(
         net, target_test_loader, conf, bootstrap=conf.bootstrap_eval, 
         n_bootstrap_samples=conf.n_bootstrap_samples, bootstrap_seed=conf.seed, fraction=0.5
     )
+
+    # Initialize metrics lists
+    test_groups = ["all_sensors"]
     for i in range(conf.heads):
-        if conf.bootstrap_eval:
-            print(f"Head {i}: {np.array(head_accs[i]).mean():.2f} ± {np.array(head_accs[i]).std():.2f}, "
-                f"Alt: {np.array(head_accs_alt[i]).mean():.2f} ± {np.array(head_accs_alt[i]).std():.2f}")
-        else:
-            print(f"Head {i}: {head_accs[i]:.2f}, Alt: {head_accs_alt[i]:.2f}")
-    print(f"Test AUROCs:")
-    for i in range(conf.heads):
-        if conf.bootstrap_eval:
-            print(f"Head {i}: {np.array(head_aurocs[i]).mean():.2f} ± {np.array(head_aurocs[i]).std():.2f}")
-        else:
-            print(f"Head {i}: {head_aurocs[i]:.2f}")
-    # stop run all 
+        # acc
+        metrics[f"epoch_test_acc_{i}"] = [head_accs[i]]
+        for group in test_groups:
+            metrics[f"epoch_test_acc_{i}_{group}"] = [head_accs_groups[group][i]]
+        # auroc
+        metrics[f"epoch_test_auroc_{i}"] = [np.array(head_aurocs[i]).mean()]
+        metrics[f"epoch_test_auroc_{i}_std"] = [np.array(head_aurocs[i]).std()]
+
+    # Save metrics
+    import json
+    with open(f"{conf.exp_dir}/metrics.json", "w") as f:
+        json.dump(metrics, f, indent=4)
+    for k, v in metrics.items():
+        print(k, v)
     raise ValueError("Stop run all (not an actual error)")
 
 
@@ -640,7 +616,7 @@ if not conf.train:
 
 
 def train_target(conf: Config):
-    return conf.aux_weight > 0 or conf.use_visible_labels
+    return conf.aux_weight > 0 or conf.target_labels is not None
 
 
 # In[ ]:
@@ -655,12 +631,12 @@ for epoch in range(conf.epochs):
     target_logit_ls = []
     source_batch_loss = 0
     source_batch_corrects = {i: 0 for i in range(conf.heads)}
-    target_batch_corrects = {(i, label): 0 for i in range(conf.heads) for label in ["y", "gl"]}
-    for batch_idx, (x, y, gl) in tqdm(enumerate(source_train_loader), desc="Source train", total=len(source_train_loader)):
+    target_batch_corrects = {(i, label): 0 for i in range(conf.heads) for label in ["y", "all_sensors", "sensors_agree"]}
+    for batch_idx, (x, y, gl) in tqdm(enumerate(source_train_loader), desc="Train", total=len(source_train_loader)):
         # compute source logits with micro batch 
         x, y, gl = to_device(x, y, gl, conf.device)
         logits = net(x)
-        losses = compute_src_losses(logits, y, gl, conf.binary, conf.use_group_labels)
+        losses = compute_src_losses(logits, y, gl, conf.binary, conf.source_labels)
         xent = sum(losses)
         source_batch_loss += xent.item()
 
@@ -669,7 +645,7 @@ for epoch in range(conf.epochs):
             source_batch_corrects[i] += compute_corrects(logits, i, y, conf.binary)
         # compute target logits with no grad on forward batch 
         div_loss = torch.tensor(0.0)
-        visible_loss = torch.tensor(0.0)
+        labeled_target_loss = torch.tensor(0.0)
         if train_target(conf):
             if batch_idx % (conf.effective_batch_size // conf.micro_batch_size) == 0:
                 target_logits_ls = []
@@ -682,7 +658,6 @@ for epoch in range(conf.epochs):
                 with torch.no_grad():
                     target_logits_ls.append(net(target_batch).detach())
                 target_logits = torch.cat(target_logits_ls, dim=0)
-                print("computed target logits")
             # compute target logits with grad on micro batch
             micro_batch_idx = batch_idx % (conf.effective_batch_size // conf.micro_batch_size)
             micro_slice = slice(micro_batch_idx * conf.micro_batch_size, (micro_batch_idx + 1) * conf.micro_batch_size)
@@ -696,10 +671,12 @@ for epoch in range(conf.epochs):
                 for i in range(len(cloned_target_logits))
             ])
 
-            div_loss, visible_loss = compute_target_loss(new_target_logits, target_y, target_gl, loss_fn, conf.loss_type, conf.use_visible_labels)
+            div_loss, labeled_target_loss = compute_target_loss(
+                new_target_logits, target_y, target_gl, loss_fn, conf.loss_type, conf.target_labels
+            )
 
         # full loss (on micro batch)
-        full_loss = conf.source_weight * xent + conf.aux_weight * div_loss + visible_loss   
+        full_loss = conf.source_weight * xent + conf.aux_weight * div_loss + labeled_target_loss   
         full_loss.backward() 
         
         # update weights, clear gradients on effective batch
@@ -713,7 +690,8 @@ for epoch in range(conf.epochs):
             if train_target(conf):
                 for i in range(conf.heads):
                     target_batch_corrects[(i, "y")] += compute_corrects(new_target_logits, i, target_y, conf.binary) 
-                    target_batch_corrects[(i, "gl")] += compute_corrects(new_target_logits, i, target_gl[:, 1], conf.binary)
+                    target_batch_corrects[(i, "all_sensors")] += compute_corrects(new_target_logits, i, target_gl[:, 1], conf.binary)
+                    target_batch_corrects[(i, "sensors_agree")] += compute_corrects(new_target_logits, i, target_gl[:, 2], conf.binary)
 
             source_batch_loss = source_batch_loss / conf.effective_batch_size
             # compute batch metrics 
@@ -722,41 +700,43 @@ for epoch in range(conf.epochs):
             writer.add_scalar("train/source_loss", source_batch_loss, epoch * effective_num_batches + effective_batch_idx)
             if conf.aux_weight > 0:
                 writer.add_scalar("train/div_loss", div_loss.item(), epoch * effective_num_batches + effective_batch_idx)
-            if conf.use_visible_labels:
-                writer.add_scalar("train/visible_loss", visible_loss.item(), epoch * effective_num_batches + effective_batch_idx)
-            writer.add_scalar("train/full_loss", source_batch_loss + conf.aux_weight * div_loss.item() + visible_loss.item(), epoch * effective_num_batches + effective_batch_idx)
+            if conf.target_labels is not None:
+                writer.add_scalar("train/labeled_target_loss", labeled_target_loss.item(), epoch * effective_num_batches + effective_batch_idx)
+            writer.add_scalar("train/full_loss", source_batch_loss + conf.aux_weight * div_loss.item() + labeled_target_loss.item(), epoch * effective_num_batches + effective_batch_idx)
             
             for i in range(conf.heads):
                 writer.add_scalar(f"train/source_acc_{i}", source_batch_corrects[i] / conf.effective_batch_size, epoch * effective_num_batches + effective_batch_idx)
                 if train_target(conf):
-                    for label in ["y", "gl"]:
+                    for label in ["y", "all_sensors", "sensors_agree"]:
                         writer.add_scalar(f"train/target_acc_{i}_{label}", target_batch_corrects[(i, label)] / conf.effective_batch_size, epoch * effective_num_batches + effective_batch_idx)
             source_batch_loss = 0
             source_batch_corrects = {i: 0 for i in range(conf.heads)}
-            target_batch_corrects = {(i, label): 0 for i in range(conf.heads) for label in ["y", "gl"]}
+            target_batch_corrects = {(i, label): 0 for i in range(conf.heads) for label in ["y", "all_sensors", "sensors_agree"]}
     
     # validation and test
     if (epoch + 1) % 1 == 0:
         net.eval()
         # compute repulsion loss on target validation set (used for model selection)
         div_losses_val = []
-        visible_losses_val = []
+        labeled_target_losses_val = []
         with torch.no_grad():
             for batch in tqdm(target_val_loader, desc="Target val"):
                 x, y, gl = to_device(*batch, conf.device)
                 logits_val = net(x)
-                div_loss, visible_loss = compute_target_loss(logits_val, y, gl, loss_fn, conf.loss_type, conf.use_visible_labels)
+                div_loss, labeled_target_loss = compute_target_loss(
+                    logits_val, y, gl, loss_fn, conf.loss_type, conf.target_labels
+                )
                 div_losses_val.append(div_loss.item())
-                visible_losses_val.append(visible_loss.item())
+                labeled_target_losses_val.append(labeled_target_loss.item())
         
         metrics[f"val_target_div_loss"].append(np.mean(div_losses_val))
-        metrics[f"val_target_visible_loss"].append(np.mean(visible_losses_val))
+        metrics[f"val_target_labeled_loss"].append(np.mean(labeled_target_losses_val))
         metrics[f"val_target_weighted_div_loss"].append(np.mean(div_losses_val) * conf.aux_weight)
-        metrics[f"val_target_loss"].append(np.mean(div_losses_val) * conf.aux_weight + np.mean(visible_losses_val))
+        metrics[f"val_target_loss"].append(np.mean(div_losses_val) * conf.aux_weight + np.mean(labeled_target_losses_val))
         
         writer.add_scalar("val/div_loss", metrics[f"val_target_div_loss"][-1], epoch)
         writer.add_scalar("val/weighted_div_loss", metrics[f"val_target_weighted_div_loss"][-1], epoch)
-        writer.add_scalar("val/visible_loss", metrics[f"val_target_visible_loss"][-1], epoch)
+        writer.add_scalar("val/labeled_target_loss", metrics[f"val_target_labeled_loss"][-1], epoch)
         writer.add_scalar("val/target_loss", metrics[f"val_target_loss"][-1], epoch)
         # compute xent on source validation set
         xent_val = []
@@ -764,7 +744,7 @@ for epoch in range(conf.epochs):
             for batch in tqdm(source_val_loader, desc="Source val"):
                 x, y, gl = to_device(*batch, conf.device)
                 logits_val = net(x)
-                losses_val = compute_src_losses(logits_val, y, gl, conf.binary, conf.use_group_labels)
+                losses_val = compute_src_losses(logits_val, y, gl, conf.binary, conf.source_labels)
                 xent_val.append(sum(losses_val).item())
         metrics[f"val_source_xent"].append(np.mean(xent_val))
         writer.add_scalar("val/source_loss", metrics[f"val_source_xent"][-1], epoch)
@@ -773,38 +753,36 @@ for epoch in range(conf.epochs):
         writer.add_scalar("val/val_loss", metrics[f"val_loss"][-1], epoch)
         
         # test evaluation (acc, acc_alt, auroc)
-        head_accs, head_accs_alt, head_aurocs = eval(
+        head_accs, head_accs_groups, head_aurocs = eval(
             net, target_test_loader, conf, bootstrap=conf.bootstrap_eval, 
             n_bootstrap_samples=conf.n_bootstrap_samples, bootstrap_seed=conf.seed
         )
+        test_groups = ["all_sensors"]
         for i in range(conf.heads):
-            if conf.bootstrap_eval:
-                metrics[f"epoch_test_acc_{i}"].append(np.array(head_accs[i]).mean())
-                metrics[f"epoch_test_acc_{i}_std"].append(np.array(head_accs[i]).std())
-                metrics[f"epoch_test_acc_{i}_alt"].append(np.array(head_accs_alt[i]).mean())
-                metrics[f"epoch_test_acc_{i}_alt_std"].append(np.array(head_accs_alt[i]).std())
-                metrics[f"epoch_test_auroc_{i}"].append(np.array(head_aurocs[i]).mean())
-                metrics[f"epoch_test_auroc_{i}_std"].append(np.array(head_aurocs[i]).std())
-                writer.add_scalar(f"val/test_acc_{i}", np.array(head_accs[i]).mean(), epoch)
-                writer.add_scalar(f"val/test_acc_{i}_alt", np.array(head_accs_alt[i]).mean(), epoch)
-                writer.add_scalar(f"val/test_auroc_{i}", np.array(head_aurocs[i]).mean(), epoch)
-            else:
-                metrics[f"epoch_test_acc_{i}"].append(head_accs[i])
-                metrics[f"epoch_test_acc_{i}_alt"].append(head_accs_alt[i])
-                metrics[f"epoch_test_auroc_{i}"].append(head_aurocs[i])
-                writer.add_scalar(f"val/test_acc_{i}", head_accs[i], epoch)
-                writer.add_scalar(f"val/test_acc_{i}_alt", head_accs_alt[i], epoch)
-                writer.add_scalar(f"val/test_auroc_{i}", head_aurocs[i], epoch)
+            # acc 
+            metrics[f"epoch_test_acc_{i}"].append(head_accs[i])
+            for group in test_groups:
+                metrics[f"epoch_test_acc_{i}_{group}"].append(head_accs_groups[group][i])
+            writer.add_scalar(f"val/test_acc_{i}", head_accs[i], epoch)
+            for group in test_groups:
+                writer.add_scalar(f"val/test_acc_{i}_{group}", head_accs_groups[group][i], epoch)
+            # auroc
+            metrics[f"epoch_test_auroc_{i}"].append(np.array(head_aurocs[i]).mean())
+            metrics[f"epoch_test_auroc_{i}_std"].append(np.array(head_aurocs[i]).std())
+            writer.add_scalar(f"val/test_auroc_{i}", np.array(head_aurocs[i]).mean(), epoch)                
         
         # print validation losses and test accs
         print(f"Epoch {epoch + 1} Test Accuracies:")
-        print(f"Target val div loss: {metrics[f'val_target_div_loss'][-1]:.4f}")
-        print(f"Target val weighted div loss: {metrics[f'val_target_weighted_div_loss'][-1]:.4f}")
-        print(f"Source val xent: {metrics[f'val_source_xent'][-1]:.4f}")
-        print(f"val loss: {metrics[f'val_loss'][-1]:.4f}")
+        print(f"Target val div loss: {metrics[f'val_target_div_loss'][-1]:.2f}")
+        print(f"Target val weighted div loss: {metrics[f'val_target_weighted_div_loss'][-1]:.2f}")
+        print(f"Source val xent: {metrics[f'val_source_xent'][-1]:.2f}")
+        print(f"val loss: {metrics[f'val_loss'][-1]:.2f}")
         for i in range(conf.heads):
-            print(f"Head {i}: {metrics[f'epoch_test_acc_{i}'][-1]:.4f}, Alt: {metrics[f'epoch_test_acc_{i}_alt'][-1]:.4f}")
-            print(f"Head {i} auroc: {metrics[f'epoch_test_auroc_{i}'][-1]:.4f}")
+            print(
+                f"Head {i}: {metrics[f'epoch_test_acc_{i}'][-1]:.2f}", 
+                *[f"{group}: {metrics[f'epoch_test_acc_{i}_{group}'][-1]:.2f}" for group in test_groups]
+            )
+            print(f"Head {i} auroc: {metrics[f'epoch_test_auroc_{i}'][-1]:.2f}")
         
         net.train()
 
