@@ -31,6 +31,12 @@ if not is_notebook():
 # In[ ]:
 
 
+# TODO: train from scratch from different datasets
+
+
+# In[ ]:
+
+
 # TODO: separete target labeled and unlabeled loss 
 # run experiment using source and target visisible (no unlabeled loss) # all vs any
 # run experiment using source and target visible, with unlabeled loss # all vs any
@@ -87,7 +93,8 @@ from dataclasses import dataclass
 class Config: 
     loss_type: LossType = LossType.TOPK
     one_sided_ace: bool = True
-    dataset: str = "diamonds-seed0"
+    model: str = "codegen-350M-mono-measurement_pred-diamonds-seed4"
+    dataset: str = "diamonds-seed4"
     lr: float = 2e-5
     weight_decay: float = 2e-2
     epochs: int = 5
@@ -102,7 +109,7 @@ class Config:
     all_measurements: bool = False
     seed: int = 42
     max_length: int = 1024
-    dataset_len: Optional[int] = None
+    dataset_len: Optional[int] = 256
     binary: bool = True
     heads: int = 2
     train: bool = True
@@ -112,6 +119,8 @@ class Config:
     aux_weight: float = 1.0
     mix_rate_lower_bound: float = 0.1
     use_group_labels: bool = False
+    bootstrap_eval: bool = True
+    n_bootstrap_samples: int = 100
     num_workers: int = 1
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     exp_dir: str = f"output/mtd/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -155,7 +164,7 @@ with open(f"{exp_dir}/config.yaml", "w") as f:
 # In[ ]:
 
 
-model_path = "oliverdk/codegen-350M-mono-measurement_pred"
+model_path = f"oliverdk/{conf.model}"
 
 
 config = AutoConfig.from_pretrained(
@@ -529,8 +538,7 @@ def compute_target_loss(logits, y, gl, loss_fn, loss_type, use_visible_labels):
 # In[ ]:
 
 
-# compute accuracy (both labels) and auroc (true vs fake positives) on test set
-def eval(net, loader, conf): 
+def eval(net, loader, conf, bootstrap=False, n_bootstrap_samples=100, bootstrap_seed=0, fraction=0.5): 
     net.eval()
 
     head_accs = []
@@ -549,7 +557,7 @@ def eval(net, loader, conf):
             assert test_logits.shape == (batch_size(test_x), conf.heads * (1 if conf.binary else classes))
             total_samples += test_y.size(0)
 
-                # Store labels for AUROC
+            # Store labels for AUROC
             all_labels.extend(test_y.cpu().numpy())
             
             for i in range(conf.heads):
@@ -558,29 +566,72 @@ def eval(net, loader, conf):
                 probs = torch.sigmoid(test_logits[:, i]).cpu().numpy()
                 all_preds[i].extend(probs)
 
-    # Compute and store AUROC for each head
-    for i in range(conf.heads):
-        auroc = roc_auc_score(all_labels, all_preds[i])
-        head_aurocs.append(auroc)
+    # Convert lists to numpy arrays for easier manipulation
+    all_labels = np.array(all_labels)
+    all_preds = [np.array(preds) for preds in all_preds]
 
-    # compute and store accuracy for each head
-    for i in range(conf.heads):
-        head_accs.append((total_correct[i] / total_samples).item())
-        head_accs_alt.append((total_correct_alt[i] / total_samples).item())
-    return head_accs, head_accs_alt, head_aurocs
+    if not bootstrap:
+        # Original non-bootstrapped computation
+        head_aurocs = [roc_auc_score(all_labels, preds) for preds in all_preds]
+        head_accs = [(total_correct[i] / total_samples).item() for i in range(conf.heads)]
+        head_accs_alt = [(total_correct_alt[i] / total_samples).item() for i in range(conf.heads)]
+        
+        # Return point estimates without confidence intervals
+        return head_accs, head_accs_alt, head_aurocs
+    else:
+        # Initialize bootstrap results
+        bootstrap_aurocs = [[] for _ in range(conf.heads)]
+        bootstrap_accs = [[] for _ in range(conf.heads)]
+        bootstrap_accs_alt = [[] for _ in range(conf.heads)]
+        
+        # Set random seed for reproducibility
+        np_gen = np.random.default_rng(bootstrap_seed)
+        
+        # Perform bootstrap sampling
+        n_samples = round(len(all_labels) * fraction)
+        for _ in range(n_bootstrap_samples):
+            # Sample indices with replacement
+            indices = np_gen.choice(n_samples, size=n_samples)
+            
+            # Compute metrics for this bootstrap sample
+            for i in range(conf.heads):
+                # AUROC
+                try:
+                    bootstrap_auroc = roc_auc_score(all_labels[indices], all_preds[i][indices])
+                except ValueError:
+                    bootstrap_auroc = np.nan
+                bootstrap_aurocs[i].append(bootstrap_auroc)
+                
+                # Accuracy metrics
+                bootstrap_acc = (total_correct[i] * indices.size / total_samples).item()
+                bootstrap_acc_alt = (total_correct_alt[i] * indices.size / total_samples).item()
+                bootstrap_accs[i].append(bootstrap_acc)
+                bootstrap_accs_alt[i].append(bootstrap_acc_alt)
+        
+        # Compute means and standard deviations
+        return bootstrap_accs, bootstrap_accs_alt, bootstrap_aurocs
 
 
 # In[ ]:
 
 
 if not conf.train:
-    head_accs, head_accs_alt, head_aurocs = eval(net, target_test_loader, conf)
-    print(f"Test Accuracies:")
+    head_accs, head_accs_alt, head_aurocs = eval(
+        net, target_test_loader, conf, bootstrap=conf.bootstrap_eval, 
+        n_bootstrap_samples=conf.n_bootstrap_samples, bootstrap_seed=conf.seed, fraction=0.5
+    )
     for i in range(conf.heads):
-        print(f"Head {i}: {head_accs[i]:.4f}, Alt: {head_accs_alt[i]:.4f}")
+        if conf.bootstrap_eval:
+            print(f"Head {i}: {np.array(head_accs[i]).mean():.2f} ± {np.array(head_accs[i]).std():.2f}, "
+                f"Alt: {np.array(head_accs_alt[i]).mean():.2f} ± {np.array(head_accs_alt[i]).std():.2f}")
+        else:
+            print(f"Head {i}: {head_accs[i]:.2f}, Alt: {head_accs_alt[i]:.2f}")
     print(f"Test AUROCs:")
     for i in range(conf.heads):
-        print(f"Head {i}: {head_aurocs[i]:.4f}")
+        if conf.bootstrap_eval:
+            print(f"Head {i}: {np.array(head_aurocs[i]).mean():.2f} ± {np.array(head_aurocs[i]).std():.2f}")
+        else:
+            print(f"Head {i}: {head_aurocs[i]:.2f}")
     # stop run all 
     raise ValueError("Stop run all (not an actual error)")
 
@@ -621,7 +672,6 @@ for epoch in range(conf.epochs):
         visible_loss = torch.tensor(0.0)
         if train_target(conf):
             if batch_idx % (conf.effective_batch_size // conf.micro_batch_size) == 0:
-                print("computing target logits")
                 target_logits_ls = []
                 try: 
                     target_batch = next(target_iter)
@@ -723,14 +773,28 @@ for epoch in range(conf.epochs):
         writer.add_scalar("val/val_loss", metrics[f"val_loss"][-1], epoch)
         
         # test evaluation (acc, acc_alt, auroc)
-        head_accs, head_accs_alt, head_aurocs = eval(net, target_test_loader, conf)
+        head_accs, head_accs_alt, head_aurocs = eval(
+            net, target_test_loader, conf, bootstrap=conf.bootstrap_eval, 
+            n_bootstrap_samples=conf.n_bootstrap_samples, bootstrap_seed=conf.seed
+        )
         for i in range(conf.heads):
-            metrics[f"epoch_test_acc_{i}"].append(head_accs[i])
-            metrics[f"epoch_test_acc_{i}_alt"].append(head_accs_alt[i])
-            metrics[f"epoch_test_auroc_{i}"].append(head_aurocs[i])
-            writer.add_scalar(f"val/test_acc_{i}", head_accs[i], epoch)
-            writer.add_scalar(f"val/test_acc_{i}_alt", head_accs_alt[i], epoch)
-            writer.add_scalar(f"val/test_auroc_{i}", head_aurocs[i], epoch)
+            if conf.bootstrap_eval:
+                metrics[f"epoch_test_acc_{i}"].append(np.array(head_accs[i]).mean())
+                metrics[f"epoch_test_acc_{i}_std"].append(np.array(head_accs[i]).std())
+                metrics[f"epoch_test_acc_{i}_alt"].append(np.array(head_accs_alt[i]).mean())
+                metrics[f"epoch_test_acc_{i}_alt_std"].append(np.array(head_accs_alt[i]).std())
+                metrics[f"epoch_test_auroc_{i}"].append(np.array(head_aurocs[i]).mean())
+                metrics[f"epoch_test_auroc_{i}_std"].append(np.array(head_aurocs[i]).std())
+                writer.add_scalar(f"val/test_acc_{i}", np.array(head_accs[i]).mean(), epoch)
+                writer.add_scalar(f"val/test_acc_{i}_alt", np.array(head_accs_alt[i]).mean(), epoch)
+                writer.add_scalar(f"val/test_auroc_{i}", np.array(head_aurocs[i]).mean(), epoch)
+            else:
+                metrics[f"epoch_test_acc_{i}"].append(head_accs[i])
+                metrics[f"epoch_test_acc_{i}_alt"].append(head_accs_alt[i])
+                metrics[f"epoch_test_auroc_{i}"].append(head_aurocs[i])
+                writer.add_scalar(f"val/test_acc_{i}", head_accs[i], epoch)
+                writer.add_scalar(f"val/test_acc_{i}_alt", head_accs_alt[i], epoch)
+                writer.add_scalar(f"val/test_auroc_{i}", head_aurocs[i], epoch)
         
         # print validation losses and test accs
         print(f"Epoch {epoch + 1} Test Accuracies:")
