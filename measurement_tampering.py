@@ -79,8 +79,8 @@ from dataclasses import dataclass, field
 class Config: 
     loss_type: LossType = LossType.TOPK
     one_sided_ace: bool = True
-    model: str = "codegen-350M-mono-measurement_pred-diamonds-seed0"
-    dataset: str = "diamonds-seed0"
+    model: str = "codegen-350M-mono-measurement_pred-diamonds-seed0"#"pythia-1_4b-deduped-measurement_pred-generated_stories"
+    dataset: str = "diamonds-seed0" #"generated_stories"
     lr: float = 2e-5 
     weight_decay: float = 2e-2
     epochs: int = 5
@@ -89,10 +89,11 @@ class Config:
     num_epochs: int = 5
     effective_batch_size: int = 32
     forward_batch_size: int = 32
-    micro_batch_size: int = 4
+    micro_batch_size: int = 1
     seed: int = 42
     max_length: int = 1024
-    dataset_len: Optional[int] = None
+    feature_dim: int = 1024
+    dataset_len: Optional[int] = 256
     binary: bool = True
     heads: int = 2
     train: bool = True
@@ -100,9 +101,10 @@ class Config:
     load_prior_probe: bool = False
     source_weight: float = 1.0
     aux_weight: float = 1.0
+    split_source_target: bool = True
     mix_rate_lower_bound: float = 0.1
-    source_labels: Optional[list[str| None]] = None # field(default_factory=lambda: None)
-    target_labels: Optional[list[str| None]] = None # field(default_factory=lambda: None) # None, all_sensors
+    source_labels: Optional[list[str| None]] = None # field(default_factory=lambda: ["sensors_agree"])
+    target_labels: Optional[list[str| None]] = None # field(default_factory=lambda: ["sensors_agree"])
     bootstrap_eval: bool = True
     n_bootstrap_samples: int = 100
     num_workers: int = 1
@@ -117,6 +119,15 @@ def post_init(conf, overrride_keys):
 
 
 conf = Config()
+
+
+# In[ ]:
+
+
+if conf.model == "pythia-1_4b-deduped-measurement_pred-generated_stories":
+    conf.dataset = "generated_stories"
+    conf.max_length = 1536
+    conf.feature_dim = 2048
 
 
 # In[ ]:
@@ -240,15 +251,29 @@ if conf.dataset_len is not None:
 
 # source (is clean)
 val_frac = 0.2
-source_data = dataset["train"].filter(lambda x: x["is_clean"])
-splits = source_data.train_test_split(train_size=1-val_frac, test_size=val_frac, seed=conf.seed)
-dataset["source_train"] = splits['train']
-dataset["source_val"] = splits['test']
 
-# target (is not clean)
-target_data = dataset["train"].filter(lambda x: not x["is_clean"])
-dataset["target_train"] = target_data
-dataset["target_val"] = dataset["train_for_val"]
+
+if conf.split_source_target: # standard split for diverse gen methods
+    source_data = dataset["train"].filter(lambda x: x["is_clean"])
+    splits = source_data.train_test_split(train_size=1-val_frac, test_size=val_frac, seed=conf.seed)
+    dataset["source_train"] = splits['train']
+    dataset["source_val"] = splits['test']
+
+    # target (is not clean)
+    target_data = dataset["train"].filter(lambda x: not x["is_clean"])
+    if "train_for_val" in dataset:
+        dataset["target_train"] = target_data
+        dataset["target_val"] = dataset["train_for_val"]
+    else:
+        target_splits = target_data.train_test_split(train_size=1-val_frac, test_size=val_frac, seed=conf.seed)
+        dataset["target_train"] = target_splits['train']
+        dataset["target_val"] = target_splits['test']
+else: 
+    # combine source and target (trusted and untrusted) 
+    # uses source labels, but None defaults to all sensors
+    splits = dataset["train"].train_test_split(train_size=1-val_frac, test_size=val_frac, seed=conf.seed)
+    dataset["source_train"] = splits['train']
+    dataset["source_val"] = splits['test']
 
 # test (validation)
 dataset["test"] = dataset["validation"]
@@ -257,7 +282,8 @@ dataset["test"] = dataset["test"].filter(lambda x: not x['is_clean'] and all(x["
 
 # remove train and train_for_val
 dataset.pop("train")
-dataset.pop("train_for_val")
+if "train_for_val" in dataset:
+    dataset.pop("train_for_val")
 dataset.pop("validation")
 
 
@@ -277,21 +303,24 @@ def split_fake_positive_rate(dataset):
     fake_positive_rate = len(dataset.filter(fake_positive)) / len(dataset)
     return fake_positive_rate
 source_train_tampering_rate = split_tampering_rate(dataset["source_train"])
-target_train_tampering_rate = split_tampering_rate(dataset["target_train"])
 source_val_tampering_rate = split_tampering_rate(dataset["source_val"])
-target_val_tampering_rate = split_tampering_rate(dataset["target_val"])
+if conf.split_source_target:
+    target_train_tampering_rate = split_tampering_rate(dataset["target_train"])
+    target_val_tampering_rate = split_tampering_rate(dataset["target_val"])
 test_tampering_rate = split_tampering_rate(dataset["test"])   
 
 source_train_fake_positive_rate = split_fake_positive_rate(dataset["source_train"])
-target_train_fake_positive_rate = split_fake_positive_rate(dataset["target_train"])
 source_val_fake_positive_rate = split_fake_positive_rate(dataset["source_val"])
-target_val_fake_positive_rate = split_fake_positive_rate(dataset["target_val"])
+if conf.split_source_target:
+    target_train_fake_positive_rate = split_fake_positive_rate(dataset["target_train"])
+    target_val_fake_positive_rate = split_fake_positive_rate(dataset["target_val"])
 test_fake_positive_rate = split_fake_positive_rate(dataset["test"])
 
 print(f"source train: tampering {source_train_tampering_rate:.2f}, fake positive {source_train_fake_positive_rate:.2f}")
-print(f"target train: tampering {target_train_tampering_rate:.2f}, fake positive {target_train_fake_positive_rate:.2f}")
 print(f"source val: tampering {source_val_tampering_rate:.2f}, fake positive {source_val_fake_positive_rate:.2f}")
-print(f"target val: tampering {target_val_tampering_rate:.2f}, fake positive {target_val_fake_positive_rate:.2f}")
+if conf.split_source_target:
+    print(f"target train: tampering {target_train_tampering_rate:.2f}, fake positive {target_train_fake_positive_rate:.2f}")
+    print(f"target val: tampering {target_val_tampering_rate:.2f}, fake positive {target_val_fake_positive_rate:.2f}")
 print(f"test: tampering {test_tampering_rate:.2f}, fake positive {test_fake_positive_rate:.2f}")
 
 
@@ -306,8 +335,9 @@ print(f"test: tampering {test_tampering_rate:.2f}, fake positive {test_fake_posi
 
 source_train_ds = MeasurementDataset(dataset["source_train"], conf.max_length)
 source_val_ds = MeasurementDataset(dataset["source_val"], conf.max_length)
-target_train_ds = MeasurementDataset(dataset["target_train"], conf.max_length)
-target_val_ds = MeasurementDataset(dataset["target_val"], conf.max_length)
+if conf.split_source_target:
+    target_train_ds = MeasurementDataset(dataset["target_train"], conf.max_length)
+    target_val_ds = MeasurementDataset(dataset["target_val"], conf.max_length)
 test_ds = MeasurementDataset(dataset["test"], conf.max_length)
 
 
@@ -331,7 +361,7 @@ class MeasurementPredBackbone(nn.Module):
 
 
 pred_model = MeasurementPredBackbone(pretrained_model).to(conf.device)
-net = MultiHeadBackbone(pred_model, n_heads=conf.heads, feature_dim=1024, classes=1).to(conf.device)
+net = MultiHeadBackbone(pred_model, n_heads=conf.heads, feature_dim=conf.feature_dim, classes=1).to(conf.device)
 
 if conf.freeze_model:
     for param in net.backbone.parameters():
@@ -343,9 +373,10 @@ if conf.load_prior_probe:
     net.heads.bias.data[1] = pretrained_model.aggregate_probe.bias.data[0]
 
 source_train_loader = DataLoader(source_train_ds, batch_size=conf.micro_batch_size, num_workers=conf.num_workers)
-target_train_loader = DataLoader(target_train_ds, batch_size=conf.effective_batch_size, num_workers=conf.num_workers)
 source_val_loader = DataLoader(source_val_ds, batch_size=conf.micro_batch_size, num_workers=conf.num_workers)
-target_val_loader = DataLoader(target_val_ds, batch_size=conf.effective_batch_size, num_workers=conf.num_workers)
+if conf.split_source_target:
+    target_train_loader = DataLoader(target_train_ds, batch_size=conf.effective_batch_size, num_workers=conf.num_workers)
+    target_val_loader = DataLoader(target_val_ds, batch_size=conf.effective_batch_size, num_workers=conf.num_workers)
 target_test_loader = DataLoader(test_ds, batch_size=conf.forward_batch_size, num_workers=conf.num_workers)
 
 opt = torch.optim.AdamW(net.parameters(), lr=conf.lr, weight_decay=conf.weight_decay)
@@ -391,7 +422,7 @@ def compute_src_losses(
 ):
     logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
     if source_labels is None:
-        labels = torch.cat([y, y], dim=-1)
+        labels = torch.cat([gl[:, 1], gl[:, 1]], dim=-1) # same as y labels on source, but different on target
     else:
         head_labels = []
         for i in range(conf.heads):
@@ -616,16 +647,17 @@ if not conf.train:
 
 
 def train_target(conf: Config):
-    return conf.aux_weight > 0 or conf.target_labels is not None
+    return conf.split_source_target and (conf.aux_weight > 0 or conf.target_labels is not None)
 
 
 # In[ ]:
 
 
 # dataloader with effective batch size, then iterate over micro batches within batch 
-target_iter = iter(target_train_loader)
-target_batch = None
-target_logits = None
+if conf.split_source_target:
+    target_iter = iter(target_train_loader)
+    target_batch = None
+    target_logits = None
 
 for epoch in range(conf.epochs):
     target_logit_ls = []
@@ -716,28 +748,6 @@ for epoch in range(conf.epochs):
     # validation and test
     if (epoch + 1) % 1 == 0:
         net.eval()
-        # compute repulsion loss on target validation set (used for model selection)
-        div_losses_val = []
-        labeled_target_losses_val = []
-        with torch.no_grad():
-            for batch in tqdm(target_val_loader, desc="Target val"):
-                x, y, gl = to_device(*batch, conf.device)
-                logits_val = net(x)
-                div_loss, labeled_target_loss = compute_target_loss(
-                    logits_val, y, gl, loss_fn, conf.loss_type, conf.target_labels
-                )
-                div_losses_val.append(div_loss.item())
-                labeled_target_losses_val.append(labeled_target_loss.item())
-        
-        metrics[f"val_target_div_loss"].append(np.mean(div_losses_val))
-        metrics[f"val_target_labeled_loss"].append(np.mean(labeled_target_losses_val))
-        metrics[f"val_target_weighted_div_loss"].append(np.mean(div_losses_val) * conf.aux_weight)
-        metrics[f"val_target_loss"].append(np.mean(div_losses_val) * conf.aux_weight + np.mean(labeled_target_losses_val))
-        
-        writer.add_scalar("val/div_loss", metrics[f"val_target_div_loss"][-1], epoch)
-        writer.add_scalar("val/weighted_div_loss", metrics[f"val_target_weighted_div_loss"][-1], epoch)
-        writer.add_scalar("val/labeled_target_loss", metrics[f"val_target_labeled_loss"][-1], epoch)
-        writer.add_scalar("val/target_loss", metrics[f"val_target_loss"][-1], epoch)
         # compute xent on source validation set
         xent_val = []
         with torch.no_grad():
@@ -749,8 +759,39 @@ for epoch in range(conf.epochs):
         metrics[f"val_source_xent"].append(np.mean(xent_val))
         writer.add_scalar("val/source_loss", metrics[f"val_source_xent"][-1], epoch)
         
-        metrics[f"val_loss"].append(metrics[f"val_target_loss"][-1] + metrics[f"val_source_xent"][-1])  
-        writer.add_scalar("val/val_loss", metrics[f"val_loss"][-1], epoch)
+       
+        
+        # compute div loss on target validation set (used for model selection)
+        if train_target(conf):
+            div_losses_val = []
+            labeled_target_losses_val = []
+            with torch.no_grad():
+                for batch in tqdm(target_val_loader, desc="Target val"):
+                    x, y, gl = to_device(*batch, conf.device)
+                    logits_val = net(x)
+                    div_loss, labeled_target_loss = compute_target_loss(
+                        logits_val, y, gl, loss_fn, conf.loss_type, conf.target_labels
+                    )
+                    div_losses_val.append(div_loss.item())
+                    labeled_target_losses_val.append(labeled_target_loss.item())
+            
+            metrics[f"val_target_div_loss"].append(np.mean(div_losses_val))
+            metrics[f"val_target_labeled_loss"].append(np.mean(labeled_target_losses_val))
+            metrics[f"val_target_weighted_div_loss"].append(np.mean(div_losses_val) * conf.aux_weight)
+            metrics[f"val_target_loss"].append(np.mean(div_losses_val) * conf.aux_weight + np.mean(labeled_target_losses_val))
+            
+            writer.add_scalar("val/div_loss", metrics[f"val_target_div_loss"][-1], epoch)
+            writer.add_scalar("val/weighted_div_loss", metrics[f"val_target_weighted_div_loss"][-1], epoch)
+            writer.add_scalar("val/labeled_target_loss", metrics[f"val_target_labeled_loss"][-1], epoch)
+            writer.add_scalar("val/target_loss", metrics[f"val_target_loss"][-1], epoch)
+
+        # total validation loss
+        val_loss = metrics[f"val_source_xent"][-1]
+        if train_target(conf):
+            val_loss += metrics[f"val_target_loss"][-1]
+        metrics[f"val_loss"].append(val_loss)  
+        writer.add_scalar("val/val_loss", val_loss, epoch)
+       
         
         # test evaluation (acc, acc_alt, auroc)
         head_accs, head_accs_groups, head_aurocs = eval(
@@ -773,16 +814,17 @@ for epoch in range(conf.epochs):
         
         # print validation losses and test accs
         print(f"Epoch {epoch + 1} Test Accuracies:")
-        print(f"Target val div loss: {metrics[f'val_target_div_loss'][-1]:.2f}")
-        print(f"Target val weighted div loss: {metrics[f'val_target_weighted_div_loss'][-1]:.2f}")
-        print(f"Source val xent: {metrics[f'val_source_xent'][-1]:.2f}")
-        print(f"val loss: {metrics[f'val_loss'][-1]:.2f}")
+        print(f"Source val xent: {metrics[f'val_source_xent'][-1]:.4f}")
+        if train_target(conf):
+            print(f"Target val div loss: {metrics[f'val_target_div_loss'][-1]:.4f}")
+            print(f"Target val weighted div loss: {metrics[f'val_target_weighted_div_loss'][-1]:.4  f}")
+        print(f"val loss: {metrics[f'val_loss'][-1]:.4f}")
         for i in range(conf.heads):
             print(
-                f"Head {i}: {metrics[f'epoch_test_acc_{i}'][-1]:.2f}", 
-                *[f"{group}: {metrics[f'epoch_test_acc_{i}_{group}'][-1]:.2f}" for group in test_groups]
+                f"Head {i}: {metrics[f'epoch_test_acc_{i}'][-1]:.4f}", 
+                *[f"{group}: {metrics[f'epoch_test_acc_{i}_{group}'][-1]:.4f}" for group in test_groups]
             )
-            print(f"Head {i} auroc: {metrics[f'epoch_test_auroc_{i}'][-1]:.2f}")
+            print(f"Head {i} auroc: {metrics[f'epoch_test_auroc_{i}'][-1]:.4f}")
         
         net.train()
 
