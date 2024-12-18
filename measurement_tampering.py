@@ -89,11 +89,11 @@ class Config:
     num_epochs: int = 5
     effective_batch_size: int = 32
     forward_batch_size: int = 32
-    micro_batch_size: int = 1
+    micro_batch_size: int = 4
     seed: int = 42
     max_length: int = 1024
     feature_dim: int = 1024
-    dataset_len: Optional[int] = 256
+    dataset_len: Optional[int] = None
     binary: bool = True
     heads: int = 2
     train: bool = True
@@ -316,18 +316,13 @@ if conf.split_source_target:
     target_val_fake_positive_rate = split_fake_positive_rate(dataset["target_val"])
 test_fake_positive_rate = split_fake_positive_rate(dataset["test"])
 
-print(f"source train: tampering {source_train_tampering_rate:.2f}, fake positive {source_train_fake_positive_rate:.2f}")
-print(f"source val: tampering {source_val_tampering_rate:.2f}, fake positive {source_val_fake_positive_rate:.2f}")
-if conf.split_source_target:
-    print(f"target train: tampering {target_train_tampering_rate:.2f}, fake positive {target_train_fake_positive_rate:.2f}")
-    print(f"target val: tampering {target_val_tampering_rate:.2f}, fake positive {target_val_fake_positive_rate:.2f}")
-print(f"test: tampering {test_tampering_rate:.2f}, fake positive {test_fake_positive_rate:.2f}")
-
-
-# In[ ]:
-
-
-# TODO: fix acc computations which use fixed indices
+if is_notebook():
+    print(f"source train: tampering {source_train_tampering_rate:.2f}, fake positive {source_train_fake_positive_rate:.2f}")
+    print(f"source val: tampering {source_val_tampering_rate:.2f}, fake positive {source_val_fake_positive_rate:.2f}")
+    if conf.split_source_target:
+        print(f"target train: tampering {target_train_tampering_rate:.2f}, fake positive {target_train_fake_positive_rate:.2f}")
+        print(f"target val: tampering {target_val_tampering_rate:.2f}, fake positive {target_val_fake_positive_rate:.2f}")
+    print(f"test: tampering {test_tampering_rate:.2f}, fake positive {test_fake_positive_rate:.2f}")
 
 
 # In[ ]:
@@ -368,9 +363,9 @@ if conf.freeze_model:
         param.requires_grad = False
 
 # load weights of pretrained model aggregate probe to second net head
-if conf.load_prior_probe:
-    net.heads.weight.data[1, :] = pretrained_model.aggregate_probe.weight.data[0]
-    net.heads.bias.data[1] = pretrained_model.aggregate_probe.bias.data[0]
+if conf.load_prior_probe: # last head 
+    net.heads.weight.data[-1, :] = pretrained_model.aggregate_probe.weight.data[0]
+    net.heads.bias.data[-1] = pretrained_model.aggregate_probe.bias.data[0]
 
 source_train_loader = DataLoader(source_train_ds, batch_size=conf.micro_batch_size, num_workers=conf.num_workers)
 source_val_loader = DataLoader(source_val_ds, batch_size=conf.micro_batch_size, num_workers=conf.num_workers)
@@ -421,23 +416,20 @@ def compute_src_losses(
     source_labels: Optional[list[Literal["all_sensors", "sensors_agree", None]]] = None
 ):
     logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
-    if source_labels is None:
-        labels = torch.cat([gl[:, 1], gl[:, 1]], dim=-1) # same as y labels on source, but different on target
-    else:
-        head_labels = []
-        for i in range(conf.heads):
-            if source_labels[i] == "all_sensors":
-                head_labels.append(gl[:, 1])
-            elif source_labels[i] == "sensors_agree":
-                head_labels.append(gl[:, 2])
-            else:
-                head_labels.append(y)
-        labels = torch.cat(head_labels, dim=-1)
+    head_labels = []
+    for i in range(conf.heads):
+        if source_labels is None or source_labels[i] is None:
+            head_labels.append(gl[:, 1]) # same as y labels on source, but different on target
+        elif source_labels[i] == "all_sensors":
+            head_labels.append(gl[:, 1])
+        elif source_labels[i] == "sensors_agree":
+            head_labels.append(gl[:, 2])
+    labels = torch.cat(head_labels, dim=-1)
     labels_chunked = torch.chunk(labels, conf.heads, dim=-1)
     if binary:
-        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.squeeze().to(torch.float32)) for logit, y in zip(logits_chunked, labels_chunked)]
+        losses = [F.binary_cross_entropy_with_logits(logit.view(-1), label.view(-1).to(torch.float32)) for logit, label in zip(logits_chunked, labels_chunked)]
     else:
-        losses = [F.cross_entropy(logit.squeeze(), y.squeeze().to(torch.long)) for logit, y in zip(logits_chunked, labels_chunked)]
+        losses = [F.cross_entropy(logit.view(-1), label.view(-1).to(torch.long)) for logit, label in zip(logits_chunked, labels_chunked)]
     return losses
 
 def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: bool):
@@ -817,7 +809,7 @@ for epoch in range(conf.epochs):
         print(f"Source val xent: {metrics[f'val_source_xent'][-1]:.4f}")
         if train_target(conf):
             print(f"Target val div loss: {metrics[f'val_target_div_loss'][-1]:.4f}")
-            print(f"Target val weighted div loss: {metrics[f'val_target_weighted_div_loss'][-1]:.4  f}")
+            print(f"Target val weighted div loss: {metrics[f'val_target_weighted_div_loss'][-1]:.4f}")
         print(f"val loss: {metrics[f'val_loss'][-1]:.4f}")
         for i in range(conf.heads):
             print(
