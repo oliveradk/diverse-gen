@@ -102,6 +102,7 @@ class Config:
     source_weight: float = 1.0
     aux_weight: float = 1.0
     split_source_target: bool = True
+    target_only_disagree: bool = False
     mix_rate_lower_bound: float = 0.1
     source_labels: Optional[list[str| None]] = None # field(default_factory=lambda: ["sensors_agree"])
     target_labels: Optional[list[str| None]] = None # field(default_factory=lambda: ["sensors_agree"])
@@ -119,6 +120,23 @@ def post_init(conf, overrride_keys):
 
 
 conf = Config()
+
+
+# In[ ]:
+
+
+# config_updates = {
+#     "freeze_model": True, 
+#     "split_source_target": False, 
+#     "target_only_disagree": True, 
+#     "loss_type": LossType.ERM, 
+#     "source_labels": ["sensors_agree"],
+#     "heads": 1, 
+#     "lr": 2e-4,
+#     "dataset_len": 512
+# }
+# conf = OmegaConf.merge(OmegaConf.structured(conf), config_updates)
+# conf = Config(**conf)
 
 
 # In[ ]:
@@ -252,6 +270,9 @@ if conf.dataset_len is not None:
 # source (is clean)
 val_frac = 0.2
 
+if conf.target_only_disagree:
+    # filter out examples where not clean and sensors agree 
+    dataset["train"] = dataset["train"].filter(lambda x: not x["is_clean"] and all(x["measurements"]))
 
 if conf.split_source_target: # standard split for diverse gen methods
     source_data = dataset["train"].filter(lambda x: x["is_clean"])
@@ -269,6 +290,7 @@ if conf.split_source_target: # standard split for diverse gen methods
         dataset["target_train"] = target_splits['train']
         dataset["target_val"] = target_splits['test']
 else: 
+    # TODO: should use train for val if present
     # combine source and target (trusted and untrusted) 
     # uses source labels, but None defaults to all sensors
     splits = dataset["train"].train_test_split(train_size=1-val_frac, test_size=val_frac, seed=conf.seed)
