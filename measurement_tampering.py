@@ -125,10 +125,14 @@ conf = Config()
 # In[ ]:
 
 
-if conf.model == "pythia-1_4b-deduped-measurement_pred-generated_stories":
-    conf.dataset = "generated_stories"
-    conf.max_length = 1536
-    conf.feature_dim = 2048
+# gen_stories_conf_update = {
+#     "model": "pythia-1_4b-deduped-measurement_pred-generated_stories",
+#     "dataset": "generated_stories",
+#     "max_length": 1536,
+#     "feature_dim": 2048,
+# }
+# conf_dict = OmegaConf.merge(OmegaConf.structured(conf), gen_stories_conf_update)
+# conf = Config(**conf_dict)
 
 
 # In[ ]:
