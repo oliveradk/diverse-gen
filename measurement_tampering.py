@@ -125,23 +125,6 @@ conf = Config()
 # In[ ]:
 
 
-# config_updates = {
-#     "freeze_model": True, 
-#     "split_source_target": False, 
-#     "target_only_disagree": True, 
-#     "loss_type": LossType.ERM, 
-#     "source_labels": ["sensors_agree"],
-#     "heads": 1, 
-#     "lr": 2e-4,
-#     "dataset_len": 512
-# }
-# conf = OmegaConf.merge(OmegaConf.structured(conf), config_updates)
-# conf = Config(**conf)
-
-
-# In[ ]:
-
-
 if conf.model == "pythia-1_4b-deduped-measurement_pred-generated_stories":
     conf.dataset = "generated_stories"
     conf.max_length = 1536
@@ -198,11 +181,17 @@ pretrained_model = AutoModelForSequenceClassification.from_pretrained(
 tokenizer = AutoTokenizer.from_pretrained(
     model_path,
     trust_remote_code=True, 
-    padding_side="left"
+    padding_side="left", 
+    truncation_side="left"
 )
-tokenizer.pad_token = tokenizer.eos_token
 
-# dataset and model
+
+# In[ ]:
+
+
+# set pad token and init sensor loc finder
+pretrained_model.set_pad_token(tokenizer)
+pretrained_model.init_sensor_loc_finder(tokenizer)
 
 
 # In[ ]:
@@ -261,7 +250,15 @@ class MeasurementDataset(Dataset):
 
 if conf.dataset_len is not None:
     for k, subset in dataset.items():
-        dataset[k] = subset.select(range(conf.dataset_len))
+        # select random inidices 
+        dataset[k] = subset.select(indices=np.random.choice(len(subset), min(conf.dataset_len, len(subset)), replace=False))
+
+
+# In[ ]:
+
+
+def all_same(ls):
+    return all(x == ls[0] for x in ls)
 
 
 # In[ ]:
@@ -271,8 +268,8 @@ if conf.dataset_len is not None:
 val_frac = 0.2
 
 if conf.target_only_disagree:
-    # filter out examples where not clean and sensors agree 
-    dataset["train"] = dataset["train"].filter(lambda x: not x["is_clean"] and all(x["measurements"]))
+    # only clean examples or examples where sensors disagree filter out examples where not clean and sensors agree 
+    dataset["train"] = dataset["train"].filter(lambda x: x["is_clean"] or not all_same(x['measurements']))
 
 if conf.split_source_target: # standard split for diverse gen methods
     source_data = dataset["train"].filter(lambda x: x["is_clean"])
@@ -368,8 +365,14 @@ class MeasurementPredBackbone(nn.Module):
     
     def forward(self, x):
         out = self.pretrained_model.base_model(x['input_ids'], attention_mask=x['attention_mask'])
-        embd = out.last_hidden_state[:, -1, :]
-        return embd
+        sensor_locs = self.pretrained_model.find_sensor_locs(x['input_ids'])
+        sensor_embs = out.last_hidden_state.gather(
+            1, sensor_locs.unsqueeze(-1).expand(-1, -1, out.last_hidden_state.size(-1))
+        )
+        assert sensor_embs.shape == (x['input_ids'].size(0), 4, out.last_hidden_state.size(-1))
+        aggregate_sensor_embs = sensor_embs[:, -1, :].squeeze(1)
+        assert aggregate_sensor_embs.shape == (x['input_ids'].size(0), out.last_hidden_state.size(-1))
+        return aggregate_sensor_embs
 
 
 # # Train
