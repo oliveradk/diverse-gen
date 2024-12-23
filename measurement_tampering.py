@@ -79,6 +79,8 @@ from dataclasses import dataclass, field
 class Config: 
     loss_type: LossType = LossType.TOPK
     one_sided_ace: bool = True
+    ace_agree: bool = False
+    pseudo_label_all_groups: bool = False
     model: str = "codegen-350M-mono-measurement_pred-diamonds-seed0"#"pythia-1_4b-deduped-measurement_pred-generated_stories"
     dataset: str = "diamonds-seed0" #"generated_stories"
     lr: float = 2e-5 
@@ -120,6 +122,38 @@ def post_init(conf, overrride_keys):
 
 
 conf = Config()
+
+
+# In[ ]:
+
+
+# topk_tamper_conf = {
+#     "loss_type": LossType.TOPK,
+#     "one_sided_ace": True,
+#     "ace_agree": True,
+#     "target_only_disagree": True,
+#     "split_source_target": True,
+#     "pseudo_label_all_groups": True,
+#     "source_labels": [None, "sensors_agree"],
+#     "target_labels": [None, "sensors_agree"]
+# }
+# conf_dict = OmegaConf.merge(OmegaConf.structured(conf), topk_tamper_conf)
+# conf = Config(**conf_dict)
+
+
+# In[ ]:
+
+
+# tamper_conf = {
+#     "loss_type": LossType.ERM,
+#     "target_only_disagree": True,
+#     "split_source_target": False,
+#     "source_labels": ["sensors_agree"],
+#     "target_labels": ["sensors_agree"], 
+#     "heads": 1
+# }
+# conf_dict = OmegaConf.merge(OmegaConf.structured(conf), tamper_conf)
+# conf = Config(**conf_dict)
 
 
 # In[ ]:
@@ -271,7 +305,7 @@ def all_same(ls):
 # source (is clean)
 val_frac = 0.2
 
-if conf.target_only_disagree:
+if conf.target_only_disagree and not conf.split_source_target:
     # only clean examples or examples where sensors disagree filter out examples where not clean and sensors agree 
     dataset["train"] = dataset["train"].filter(lambda x: x["is_clean"] or not all_same(x['measurements']))
 
@@ -419,7 +453,7 @@ elif conf.loss_type == LossType.ERM:
     loss_fn = PassThroughLoss()
 elif conf.loss_type == LossType.TOPK:
     if conf.one_sided_ace:
-        group_mix_rates = {(0, 1): conf.mix_rate_lower_bound}
+        group_mix_rates = {(0,0) if conf.ace_agree else (0,1): conf.mix_rate_lower_bound}
         mix_rate = None
     else:
         mix_rate = conf.mix_rate_lower_bound
@@ -431,7 +465,7 @@ elif conf.loss_type == LossType.TOPK:
         mode="topk", 
         group_mix_rates=group_mix_rates,  # TODO: should ignore visible labels
         mix_rate=mix_rate,
-        pseudo_label_all_groups=False, 
+        pseudo_label_all_groups=conf.pseudo_label_all_groups, 
         device=conf.device
     )
 
@@ -533,12 +567,25 @@ def compute_labeled_target_loss(
 
 def compute_target_loss(
         logits, y, gl, loss_fn, loss_type, 
-        target_labels: Optional[list[Literal["all_sensors", "sensors_agree", None]]] = None
+        target_labels: Optional[list[Literal["all_sensors", "sensors_agree", None]]] = None, 
+        only_disagreeing_labels: bool = False
     ): 
-    div_loss = loss_fn(logits)
+    # separate instances based on whether they have disagreeing measurements (i.e. gl[:, 2] == 0)
+    div_logits = logits 
+    labeled_logits = logits 
+    labeled_gl = gl 
+    bs = logits.shape[0]
+    
+    if only_disagreeing_labels:
+        disagreeing_mask = gl[:, 2] == 0
+        div_logits = logits[~disagreeing_mask]
+        labeled_logits = logits[disagreeing_mask]
+        labeled_gl = gl[disagreeing_mask]
+
+    div_loss = loss_fn(div_logits, bs=bs)
     labeled_loss = torch.tensor(0.0)    
     if target_labels is not None:
-        labeled_loss = compute_labeled_target_loss(logits, gl, target_labels)
+        labeled_loss = compute_labeled_target_loss(labeled_logits, labeled_gl, target_labels)
     return div_loss, labeled_loss
 
 
@@ -704,6 +751,8 @@ for epoch in range(conf.epochs):
                 target_logits_ls = []
                 try: 
                     target_batch = next(target_iter)
+                    if target_batch[1].shape[0] != conf.effective_batch_size:
+                        raise StopIteration
                 except StopIteration:
                     target_iter = iter(target_train_loader)
                     target_batch = next(target_iter)
@@ -725,7 +774,8 @@ for epoch in range(conf.epochs):
             ])
 
             div_loss, labeled_target_loss = compute_target_loss(
-                new_target_logits, target_y, target_gl, loss_fn, conf.loss_type, conf.target_labels
+                new_target_logits, target_y, target_gl, loss_fn, conf.loss_type, conf.target_labels, 
+                only_disagreeing_labels=conf.target_only_disagree
             )
 
         # full loss (on micro batch)
@@ -791,7 +841,8 @@ for epoch in range(conf.epochs):
                     x, y, gl = to_device(*batch, conf.device)
                     logits_val = net(x)
                     div_loss, labeled_target_loss = compute_target_loss(
-                        logits_val, y, gl, loss_fn, conf.loss_type, conf.target_labels
+                        logits_val, y, gl, loss_fn, conf.loss_type, conf.target_labels, 
+                        only_disagreeing_labels=conf.target_only_disagree
                     )
                     div_losses_val.append(div_loss.item())
                     labeled_target_losses_val.append(labeled_target_loss.item())

@@ -85,14 +85,15 @@ class ACELoss(t.nn.Module):
         self.pseudo_label_all_groups = pseudo_label_all_groups
         self.device = device
     
-    def forward(self, logits):
+    def forward(self, logits, bs=None):
         """
         Args:
             logits (torch.Tensor): Input logits with shape [BATCH_SIZE, HEADS * CLASSES].
             (or [BATCH_SIZE, HEADS] if binary)
         """
         assert logits.shape[1] == self.heads * self.classes if not self.binary else self.heads
-        bs = logits.shape[0]
+        if bs is None:
+            bs = logits.shape[0]
 
 
         # reshape logits to [BATCH_SIZE, HEADS, CLASSES] if not binary
