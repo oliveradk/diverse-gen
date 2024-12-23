@@ -44,7 +44,10 @@ def compute_group_losses(
         group_losses[group] = sum(head_losses[head, label] for head, label in enumerate(group))
     return group_losses
 
-def compute_loss(losses: t.Tensor, mix_rate: float, mode: Literal['exp', 'prob', 'topk']):
+def compute_loss(
+        losses: t.Tensor, mix_rate: float, mode: Literal['exp', 'prob', 'topk'], 
+        virtual_bs: Optional[int] = None
+    ):
     assert losses.ndim == 1
     bs = losses.shape[0]
     if mode == 'exp':
@@ -54,7 +57,8 @@ def compute_loss(losses: t.Tensor, mix_rate: float, mode: Literal['exp', 'prob',
         prob_weight = t.tensor([binom.pmf(i, bs, mix_rate) / i for i in range(bs)])
         loss = (losses * prob_weight).sum()
     elif mode == 'topk':
-        k = round(bs * mix_rate)
+        topk_bs = virtual_bs if virtual_bs is not None else bs
+        k = round(topk_bs * mix_rate)
         loss = t.topk(losses, k=k, largest=False).values.mean()
     return loss
 
@@ -85,15 +89,14 @@ class ACELoss(t.nn.Module):
         self.pseudo_label_all_groups = pseudo_label_all_groups
         self.device = device
     
-    def forward(self, logits, bs=None):
+    def forward(self, logits, virtual_bs: Optional[int] = None):
         """
         Args:
             logits (torch.Tensor): Input logits with shape [BATCH_SIZE, HEADS * CLASSES].
             (or [BATCH_SIZE, HEADS] if binary)
         """
         assert logits.shape[1] == self.heads * self.classes if not self.binary else self.heads
-        if bs is None:
-            bs = logits.shape[0]
+        bs = logits.shape[0]
 
 
         # reshape logits to [BATCH_SIZE, HEADS, CLASSES] if not binary
@@ -114,12 +117,12 @@ class ACELoss(t.nn.Module):
             assert group_losses_stacked.shape == (len(group_losses), logits.shape[0])
             losses = group_losses_stacked.min(dim=0).values
 
-            loss = compute_loss(losses, self.mix_rate, self.mode)
+            loss = compute_loss(losses, self.mix_rate, self.mode, virtual_bs)
         # compute loss per group
         else: 
             loss = 0 
             for group, group_mix_rate in self.group_mix_rates.items():
                 losses = group_losses[group]
                 # TODO: ensure one pseudo-label per instance?
-                loss += compute_loss(losses, group_mix_rate, self.mode)
+                loss += compute_loss(losses, group_mix_rate, self.mode, virtual_bs)
         return loss

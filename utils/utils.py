@@ -13,6 +13,9 @@ def conf_to_args(conf: dict):
             value = value.name 
         elif value is None:
             value = 'null'
+        elif isinstance(value, list):
+            value = str(value)
+            value = value.replace("None", "null")
         args.append(f"{key}={value}")
     return args
 

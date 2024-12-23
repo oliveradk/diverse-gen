@@ -135,6 +135,24 @@ conf = Config()
 #     "split_source_target": True,
 #     "pseudo_label_all_groups": True,
 #     "source_labels": [None, "sensors_agree"],
+#     "target_labels": [None, "sensors_agree"], 
+#     "dataset_len": 128
+# }
+# conf_dict = OmegaConf.merge(OmegaConf.structured(conf), topk_tamper_conf)
+# conf = Config(**conf_dict)
+
+
+# In[ ]:
+
+
+# topk_tamper_conf = {
+#     "loss_type": LossType.TOPK,
+#     "one_sided_ace": True,
+#     "ace_agree": True,
+#     "target_only_disagree": True,
+#     "split_source_target": True,
+#     "pseudo_label_all_groups": True,
+#     "source_labels": [None, "sensors_agree"],
 #     "target_labels": [None, "sensors_agree"]
 # }
 # conf_dict = OmegaConf.merge(OmegaConf.structured(conf), topk_tamper_conf)
@@ -176,6 +194,7 @@ overrride_keys = []
 if not is_notebook():
     import sys 
     overrides = OmegaConf.from_cli(sys.argv[1:])
+    print("overrides", overrides)
     overrride_keys = overrides.keys()
     conf_dict = OmegaConf.merge(OmegaConf.structured(conf), overrides)
     conf = Config(**conf_dict)
@@ -574,7 +593,9 @@ def compute_target_loss(
     div_logits = logits 
     labeled_logits = logits 
     labeled_gl = gl 
-    bs = logits.shape[0]
+    div_loss_kwargs = {}
+    if loss_type == LossType.TOPK:
+        div_loss_kwargs["virtual_bs"] = logits.shape[0]
     
     if only_disagreeing_labels:
         disagreeing_mask = gl[:, 2] == 0
@@ -582,7 +603,7 @@ def compute_target_loss(
         labeled_logits = logits[disagreeing_mask]
         labeled_gl = gl[disagreeing_mask]
 
-    div_loss = loss_fn(div_logits, bs=bs)
+    div_loss = loss_fn(div_logits, **div_loss_kwargs)
     labeled_loss = torch.tensor(0.0)    
     if target_labels is not None:
         labeled_loss = compute_labeled_target_loss(labeled_logits, labeled_gl, target_labels)
