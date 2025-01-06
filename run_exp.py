@@ -19,13 +19,38 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "6" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "7" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
 import matplotlib 
 if not is_notebook():
     matplotlib.use('Agg')
+
+
+# In[ ]:
+
+
+# thoughts: waterbirds results seem like a scam (very specific hyperparams, we'll see if they replicate)
+# if they do, its probably a result of extreme overfitting (unless they really tuned it on source validation acc, which I highly doubt)
+# if it does'nt replicate, I might email the authors, confirom the hyperparmeters, run them on their setup 
+# could also experiment with unidirection ace 
+
+
+# In[ ]:
+
+
+# TODO: want to measure worst-group performance on CelebA, Waterbirds, Camelyon 
+# also maybe want to evaluate performance according to even split eval grouper? (if that's how its done in prier work)
+
+# NOTE: inspired by "group adjustments of 1/sqrt(n_g)" in Sagawa (which is motivated by Cao 2019 https://arxiv.org/pdf/1906.07413), 
+# we should plaussibly improve performance via a principled-reweighting (might be especially relevant for low mix rates)
+
+
+# In[ ]:
+
+
+# hmm - could apply the group adjustments from group dro 
 
 
 # In[ ]:
@@ -90,34 +115,37 @@ from utils.act_utils import get_acts_and_labels, plot_activations, transform_act
 
 @dataclass
 class Config():
-    seed: int = 2
-    dataset: str = "cifar_mnist"
-    loss_type: LossType = LossType.TOPK
+    seed: int = 0
+    dataset: str = "waterbirds"
+    loss_type: LossType = LossType.DIVDIS
     batch_size: int = 32
     target_batch_size: int = 64
     epochs: int = 10
     heads: int = 2
-    binary: bool = True
+    binary: bool = False
     model: str = "Resnet50"
     shared_backbone: bool = True
     source_weight: float = 1.0
     aux_weight: float = 1.0
     use_group_labels: bool = False
-    source_cc: bool = False
+    source_cc: bool = True
+    source_val_split: float = 0.0
+    target_val_split: float = 0.0
     source_mix_rate: Optional[float] = 0.0
     source_01_mix_rate: Optional[float] = None
     source_10_mix_rate: Optional[float] = None
-    mix_rate: Optional[float] = 0.5
+    mix_rate: Optional[float] = None
     target_01_mix_rate: Optional[float] = None
     target_10_mix_rate: Optional[float] = None
     aggregate_mix_rate: bool = False
-    mix_rate_lower_bound: Optional[float] = 0.1
+    mix_rate_lower_bound: Optional[float] = 0.5
     target_01_mix_rate_lower_bound: Optional[float] = None
     target_10_mix_rate_lower_bound: Optional[float] = None
     pseudo_label_all_groups: bool = False
     inbalance_ratio: Optional[bool] = False
-    lr: float = 1e-4
-    weight_decay: float = 1e-4
+    lr: float = 1e-3
+    weight_decay: float = 1e-4 # 1e-4
+    optimizer: str = "sgd"
     lr_scheduler: Optional[str] = None 
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
@@ -175,20 +203,44 @@ conf = Config()
 # In[ ]:
 
 
+# if conf.dataset == "waterbirds" and conf.loss_type == LossType.DIVDIS:
+#     conf.lr = 1e-3
+#     conf.weight_decay = 1e-4
+#     conf.epochs = 100
+#     conf.optimizer = "sgd"
+#     conf.batch_size = 16 
+#     conf.target_batch_size = 16
+#     conf.aux_weight = 10.0
+
+
+
+# In[ ]:
+
+
+# if conf.dataset == "waterbirds" and conf.loss_type == LossType.TOPK:
+#     conf.optimizer = "sgd"
+#     conf.target_01_mix_rate_lower_bound = 0.38
+#     conf.target_10_mix_rate_lower_bound = 0.10
+#     conf.mix_rate_lower_bound = None
+
+
+# In[ ]:
+
+
 # # # toy grid configs 
-if conf.dataset == "toy_grid":
-    conf.model = "toy_model"
-    conf.epochs = 128
-if conf.model == "ClipViT":
-    # conf.epochs = 5
-    conf.lr = 1e-5
+# if conf.dataset == "toy_grid":
+#     conf.model = "toy_model"
+#     conf.epochs = 128
+# if conf.model == "ClipViT":
+#     # conf.epochs = 5
+#     conf.lr = 1e-5
 # Resnet50 Configs
-if conf.model == "Resnet50":
-    conf.lr = 1e-4 # probably too high, should be 1e-4
-if conf.dataset == "multi_nli" or conf.dataset == "civil_comments":
-    conf.model = "bert"
-    conf.lr = 1e-5
-    conf.lr_scheduler = "cosine"
+# if conf.model == "Resnet50":
+#     conf.lr = 1e-4 # probably too high, should be 1e-4
+# if conf.dataset == "multi_nli" or conf.dataset == "civil_comments":
+#     conf.model = "bert"
+#     conf.lr = 1e-5
+#     conf.lr_scheduler = "cosine"
 
 
 
@@ -235,7 +287,7 @@ tokenizer = None
 if conf.model == "Resnet50":
     from torchvision import models
     from torchvision.models.resnet import ResNet50_Weights
-    resnet_builder = lambda: models.resnet50(weights=ResNet50_Weights.DEFAULT)  
+    resnet_builder = lambda: models.resnet50(pretrained=True) # models.resnet50(weights=ResNet50_Weights.DEFAULT)    
     model_builder = lambda: torch.nn.Sequential(*list(resnet_builder().children())[:-1])
     resnet_50_transforms = ResNet50_Weights.DEFAULT.transforms()
     model_transform = transforms.Compose([
@@ -320,10 +372,30 @@ elif conf.dataset == "fmnist_mnist":
         pad_sides=pad_sides
     )
 elif conf.dataset == "waterbirds":
+    # transformation exactly copied from DivDis paper https://github.com/yoonholee/DivDis/blob/main/subpopulation/data/cub_dataset.py
+    target_resolution = (224, 224)
+    scale = 256.0 / 224.0
+    model_transform = transforms.Compose(
+            [
+                transforms.Resize(
+                    (
+                        int(target_resolution[0] * scale),
+                        int(target_resolution[1] * scale),
+                    )
+                ),
+                transforms.CenterCrop(target_resolution),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ]
+        )
+
     source_train, source_val, target_train, target_val, target_test = get_waterbirds_datasets(
         mix_rate=conf.mix_rate, 
         source_cc=conf.source_cc,
         transform=model_transform, 
+        convert_to_tensor=False,
+        val_split=conf.source_val_split,
+        target_val_split=conf.target_val_split
     )
     collate_fn = source_train.dataset.collate
 elif conf.dataset.startswith("celebA"):
@@ -413,9 +485,11 @@ if is_img and img.dim() == 3 and is_notebook():
 
 # data loaders 
 source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
-source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+if len(source_val) > 0:
+    source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
 target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
-target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+if len(target_val) > 0:
+    target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
 target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
 
 # classifiers
@@ -428,7 +502,10 @@ else:
 net = net.to(conf.device)
 
 # optimizer
-opt = torch.optim.AdamW(net.parameters(), lr=conf.lr, weight_decay=conf.weight_decay)
+if conf.optimizer == "adamw":
+    opt = torch.optim.AdamW(net.parameters(), lr=conf.lr, weight_decay=conf.weight_decay)
+elif conf.optimizer == "sgd":
+    opt = torch.optim.SGD(net.parameters(), lr=conf.lr, weight_decay=conf.weight_decay, momentum=0.9)
 num_steps = conf.epochs * len(source_train_loader)
 if conf.lr_scheduler == "cosine":       
     scheduler = get_cosine_schedule_with_warmup(
@@ -561,21 +638,24 @@ if not is_notebook() and conf.plot_activations:
 # In[ ]:
 
 
-def compute_src_losses(logits, y, gl, binary, use_group_labels):
+def compute_src_losses(logits, y, gl):
     logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
-    labels = torch.cat([y, y], dim=-1) if not use_group_labels else gl
+    labels = torch.cat([y, y], dim=-1) if not conf.use_group_labels else gl
     labels_chunked = torch.chunk(labels, conf.heads, dim=-1)
-    if binary:
+
+    if conf.binary:
         losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.squeeze().to(torch.float32)) for logit, y in zip(logits_chunked, labels_chunked)]
     else:
-        losses = [F.cross_entropy(logit.squeeze(), y.squeeze().to(torch.long)) for logit, y in zip(logits_chunked, labels_chunked)]
+        assert logits_chunked[0].shape == (logits.size(0), classes), logits_chunked[0].shape
+        losses = [F.cross_entropy(logit.squeeze(), y.squeeze().to(torch.long)) 
+                  for logit, y in zip(logits_chunked, labels_chunked)]
     return losses
 
 def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: bool):
     if binary:
         return ((logits[:, head] > 0) == y.flatten()).sum().item()
     else:
-        logits = logits.view(logits.size(0), conf.heads, -1)
+        logits = logits.view(logits.size(0), conf.heads, classes)
         return (logits[:, head].argmax(dim=-1) == y).sum().item()
         
 
@@ -591,33 +671,119 @@ writer = SummaryWriter(log_dir=conf.exp_dir)
 # In[ ]:
 
 
+from itertools import product
+def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluating"): 
+    # compute average and group wise loss and accuracy 
+    n_features = gl.shape[1]
+
+    # loss 
+    losses = [0]
+
+    # accuracy 
+    total_corrects_by_groups = {
+        group_label: torch.zeros(conf.heads)
+        for group_label in product(range(2), repeat=n_features)
+    }
+    total_corrects_alt_by_groups = {
+        group_label: torch.zeros(conf.heads)
+        for group_label in product(range(2), repeat=n_features)
+    }
+    total_samples = 0
+    total_samples_by_groups = {
+        group_label: 0
+        for group_label in product(range(2), repeat=n_features)
+    }
+    
+    with torch.no_grad():
+        for test_x, test_y, test_gl in tqdm(loader, desc=stage):
+            test_x, test_y, test_gl = to_device(test_x, test_y, test_gl, conf.device)
+            test_logits = model(test_x)
+            # print(test_logits.shape)
+            total_samples += test_logits.size(0)
+            if use_labels and loss_fn is not None:
+                loss = loss_fn(test_logits, test_y, test_gl)
+            elif loss_fn is not None:
+                loss = loss_fn(test_logits)
+            else: 
+                loss = torch.tensor(0.0, device=conf.device)
+            if torch.isnan(loss):
+                print(f"Warning: Nan Loss (likely due to batch size and target loss) "
+                f"Batch size: {test_logits.size(0)}, Loss: {conf.loss_type}")
+            else:
+                losses.append(loss)
+
+            # parition instances into groups based on group labels 
+            logits_by_group = {}
+            for group_label in product(range(2), repeat=n_features):
+                group_label_mask = torch.all(test_gl == torch.tensor(group_label).to(device), dim=1)
+                # print("group label mask", group_label_mask.shape)
+                logits_by_group[group_label] = test_logits[group_label_mask]
+            # print("group logit shapes", [v.shape for v in logits_by_group.values()])
+            
+            for group_label, group_logits in logits_by_group.items():
+                num_examples_group = group_logits.size(0)
+                total_samples_by_groups[group_label] += num_examples_group
+                group_labels = torch.tensor(group_label).repeat(num_examples_group, 1).to(device)
+                # print("group label shapes", group_labels[:, 0].shape)
+                for i in range(conf.heads):
+                    total_corrects_by_groups[group_label][i] += compute_corrects(group_logits, i, group_labels[:, 0], conf.binary)
+                    total_corrects_alt_by_groups[group_label][i] += compute_corrects(group_logits, i, group_labels[:, 1], conf.binary)
+    
+    total_corrects = torch.stack([gl_corrects for gl_corrects in total_corrects_by_groups.values()], dim=0).sum(dim=0)
+    total_corrects_alt = torch.stack([gl_corrects for gl_corrects in total_corrects_alt_by_groups.values()], dim=0).sum(dim=0)
+
+    # average metrics
+    metrics = {}
+    for i in range(conf.heads):
+        metrics[f"acc_{i}"] = (total_corrects[i] / total_samples).item()
+        metrics[f"acc_alt_{i}"] = (total_corrects_alt[i] / total_samples).item()
+    
+    if loss_fn is not None:
+        metrics["loss"] = torch.mean(torch.tensor(losses)).item()
+    # group acc per head
+    for group_label in product(range(2), repeat=n_features):
+        for i in range(conf.heads): 
+            metrics[f"acc_{i}_{group_label}"] = (total_corrects_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
+            metrics[f"acc_alt_{i}_{group_label}"] = (total_corrects_alt_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
+    # add group counts 
+    for group_label in product(range(2), repeat=n_features):
+        metrics[f"count_{group_label}"] = total_samples_by_groups[group_label]
+
+    return metrics
+
+
+# In[ ]:
+
+
 # TODO: change diciotary values to source loss, target loss
+from itertools import cycle
+# train_loader = zip(source_train_loader, cycle(target_train_loader))
+# loader_len = len(source_train_loader)
 metrics = defaultdict(list)
-target_iter = iter(target_train_loader)
+# target_iter = iter(target_train_loader)
 if conf.freeze_heads:
     # freeze second head 
     net.freeze_head(1)
 for epoch in range(conf.epochs):
-    for batch_idx, (x, y, gl) in tqdm(enumerate(source_train_loader), desc="Source train", total=len(source_train_loader)):
-        x, y, gl = to_device(x, y, gl, conf.device)
+    train_loader = zip(source_train_loader, cycle(target_train_loader))
+    loader_len = len(source_train_loader)
+    # train
+    for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
+        # source
+        x, y, gl = to_device(*source_batch, conf.device)
         if conf.freeze_heads and epoch == conf.head_1_epochs:
             net.unfreeze_head(1)
             net.freeze_head(0)
         logits = net(x)
-        losses = compute_src_losses(logits, y, gl, conf.binary, conf.use_group_labels)
-        xent = sum(losses)
-        writer.add_scalar("train/source_loss", xent.item(), epoch * len(source_train_loader) + batch_idx)
-        # target loss 
-        try: 
-            target_x, target_y, target_gl = next(target_iter)
-        except StopIteration:
-            target_iter = iter(target_train_loader)
-            target_x, target_y, target_gl = next(target_iter)
-        target_x, target_y, target_gl = to_device(target_x, target_y, target_gl, conf.device)
+        losses = compute_src_losses(logits, y, gl) # hmm, in the DivDis implementation looks like they take a mean for each head, then take the mean of means (I thin this is the)
+        xent = torch.mean(torch.stack(losses))
+        writer.add_scalar("train/source_loss", xent.item(), epoch * loader_len + batch_idx)
+        # target
+        target_x, target_y, target_gl = to_device(*target_batch, conf.device)
         target_logits = net(target_x)
         target_loss = loss_fn(target_logits)
-        writer.add_scalar("train/target_loss", target_loss.item(), epoch * len(target_train_loader) + batch_idx)
-        writer.add_scalar("train/weighted_target_loss", conf.aux_weight * target_loss.item(), epoch * len(target_train_loader) + batch_idx)
+        writer.add_scalar("train/target_loss", target_loss.item(), epoch * loader_len + batch_idx)
+        writer.add_scalar("train/weighted_target_loss", conf.aux_weight * target_loss.item(), epoch * loader_len + batch_idx)
         if conf.freeze_heads and epoch < conf.head_1_epochs:
             target_loss = torch.tensor(0.0, device=conf.device)
         # full loss 
@@ -628,72 +794,71 @@ for epoch in range(conf.epochs):
         if scheduler is not None:
             scheduler.step()
 
-        metrics[f"xent"].append(xent.item())
-        metrics[f"repulsion_loss"].append(target_loss.item())
-    # Compute loss on target validation set (used for model selection)
-    # and aggregate metrics over the entire test set (should not really be using)
+        metrics[f"source_loss"].append(xent.item())
+        metrics[f"target_loss"].append(target_loss.item())
+    
+    # eval
     if (epoch + 1) % 1 == 0:
         net.eval()
-        # compute repulsion loss on target validation set (used for model selection)
-        target_losses_val = []
-        weighted_target_losses_val = []
-        with torch.no_grad():
-            for x, y, gl in tqdm(target_val_loader, desc="Target val"):
-                x, y, gl = to_device(x, y, gl, conf.device)
-                logits_val = net(x)
-                target_loss_val = loss_fn(logits_val)
-                target_losses_val.append(target_loss_val.item())
-                weighted_target_losses_val.append(conf.aux_weight * target_loss_val.item())
-        metrics[f"target_val_repulsion_loss"].append(np.mean(target_losses_val))
-        metrics[f"target_val_weighted_repulsion_loss"].append(np.mean(weighted_target_losses_val))
-        writer.add_scalar("val/target_loss", np.mean(target_losses_val), epoch)
-        writer.add_scalar("val/weighted_target_loss", np.mean(weighted_target_losses_val), epoch)
-        # compute xent on source validation set
-        xent_val = []
-        with torch.no_grad():
-            for x, y, gl in tqdm(source_val_loader, desc="Source val"):
-                x, y, gl = to_device(x, y, gl, conf.device)
-                logits_val = net(x)
-                losses_val = compute_src_losses(logits_val, y, gl, conf.binary, conf.use_group_labels)
-                xent_val.append(sum(losses_val).item())
-        metrics[f"source_val_xent"].append(np.mean(xent_val))
-        metrics[f"val_loss"].append(np.mean(target_losses_val) + np.mean(xent_val))
-        metrics[f"val_weighted_loss"].append(np.mean(weighted_target_losses_val) + np.mean(xent_val))
-        writer.add_scalar("val/source_loss", np.mean(xent_val), epoch)
-        writer.add_scalar("val/val_loss", np.mean(target_losses_val) + np.mean(xent_val), epoch)
-        writer.add_scalar("val/weighted_val_loss", np.mean(weighted_target_losses_val) + np.mean(xent_val), epoch)
-        # compute accuracy over target test set (used to evaluate actual performance)
-        total_correct = torch.zeros(conf.heads)
-        total_correct_alt = torch.zeros(conf.heads)
-        total_samples = 0
-        
-        with torch.no_grad():
-            for test_x, test_y, test_gl in target_test_loader:
-                test_x, test_y, test_gl = to_device(test_x, test_y, test_gl, conf.device)
-                test_logits = net(test_x)
-                assert test_logits.shape == (batch_size(test_x), conf.heads * (1 if conf.binary else classes))
-                total_samples += test_y.size(0)
-                
-                for i in range(conf.heads):
-                    total_correct[i] += compute_corrects(test_logits, i, test_y, conf.binary)
-                    total_correct_alt[i] += compute_corrects(test_logits, i, test_gl[:, alt_index], conf.binary)
-        
-        for i in range(conf.heads):
-            metrics[f"epoch_acc_{i}"].append((total_correct[i] / total_samples).item())
-            metrics[f"epoch_acc_{i}_alt"].append((total_correct_alt[i] / total_samples).item())
-            writer.add_scalar(f"val/acc_{i}", (total_correct[i] / total_samples).item(), epoch)
-            writer.add_scalar(f"val/acc_{i}_alt", (total_correct_alt[i] / total_samples).item(), epoch)
-        
-        print(f"Epoch {epoch + 1} Test Accuracies:")
+        ### Validation 
+        # source validation 
+        total_val_loss = 0.0
+        src_loss_fn = lambda x, y, gl: sum(compute_src_losses(x, y, gl))
+        if len(source_val) > 0:
+            source_val_metrics = eval(net, source_val_loader, conf.device, src_loss_fn, use_labels=True, stage="Source Val")
+            for k, v in source_val_metrics.items():
+                if 'count' not in k:
+                    metrics[f"val_source_{k}"].append(v)
+            total_val_loss += source_val_metrics["loss"]
+            writer.add_scalar("val/source_loss", source_val_metrics["loss"], epoch)
+        # target validation 
+        weighted_target_val_loss = 0.0
+        if len(target_val) > 0:  
+            target_val_metrics = eval(net, target_val_loader, conf.device, loss_fn, use_labels=False, stage="Target Val")
+            for k, v in target_val_metrics.items():
+                if 'count' not in k:
+                    metrics[f"val_target_{k}"].append(v)
+            weighted_target_val_loss = target_val_metrics["loss"] * conf.aux_weight
+            metrics["val_target_weighted_loss"].append(weighted_target_val_loss)
+            total_val_loss += weighted_target_val_loss
+        metrics["val_loss"].append(total_val_loss)
+        writer.add_scalar("val/val_loss", total_val_loss, epoch)
+
+        ### Test
+        target_test_metrics = eval(net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test")
+        for k, v in target_test_metrics.items():
+            if 'count' not in k:
+                metrics[f"test_{k}"].append(v)
+        # write test metrics to tensorboard
+        for k, v in target_test_metrics.items():
+            if 'count' not in k:
+                writer.add_scalar(f"test/{k}", v, epoch)
+
+
+        ### Print Results
+        print(f"Epoch {epoch + 1} Eval Results:")
         # print validation losses
-        print(f"Target val repulsion loss: {metrics[f'target_val_repulsion_loss'][-1]:.4f}")
-        print(f"Target val weighted repulsion loss: {metrics[f'target_val_weighted_repulsion_loss'][-1]:.4f}")
-        print(f"Source val xent: {metrics[f'source_val_xent'][-1]:.4f}")
-        print(f"val loss: {metrics[f'val_loss'][-1]:.4f}")
-        print(f"val weighted loss: {metrics[f'val_weighted_loss'][-1]:.4f}")
+        if len(source_val) > 0:
+            print(f"Source validation loss: {metrics[f'val_source_loss'][-1]:.4f}")
+        if len(target_val) > 0:
+            print(f"Target validation loss {metrics[f'val_target_loss'][-1]:.4f}")
+        print(f"Validation loss: {metrics[f'val_loss'][-1]:.4f}")
+        if len(target_val) > 0:
+            for group_label in product(range(2), repeat=gl.shape[1]):
+                print(f"Group {group_label} validation count: {target_val_metrics[f'count_{group_label}']}")
+        # print test accuracies (total and group)
+        print("\n=== Test Accuracies ===")
+        # Overall accuracy for each head
+        print("\nOverall Accuracies:")
         for i in range(conf.heads):
-            print(f"Head {i}: {metrics[f'epoch_acc_{i}'][-1]:.4f}, Alt: {metrics[f'epoch_acc_{i}_alt'][-1]:.4f}")
-        
+            print(f"Head {i}:  Main: {metrics[f'test_acc_{i}'][-1]:.4f}  |  Alt: {metrics[f'test_acc_alt_{i}'][-1]:.4f}")
+        # Group-wise accuracies
+        print("\nGroup-wise Accuracies:")
+        for group_label in product(range(2), repeat=gl.shape[1]):
+            print(f"\nGroup {group_label}, count: {target_test_metrics[f'count_{group_label}']}:")
+            for i in range(conf.heads):
+                print(f"Head {i}:  Main: {metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}  |  Alt: {metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}")
+
         # plot activations 
         if conf.plot_activations:   
             fig = plot_activations(
@@ -709,72 +874,4 @@ metrics = dict(metrics)
 import json 
 with open(f"{exp_dir}/metrics.json", "w") as f:
     json.dump(metrics, f, indent=4)
-
-
-# In[ ]:
-
-
-plt.plot(metrics["xent"], label="xent", color="red")
-plt.plot(metrics["repulsion_loss"], label="repulsion_loss", color="blue")
-plt.legend()
-plt.yscale("log")
-plt.show()
-if not is_notebook():
-    plt.close()
-
-
-# In[ ]:
-
-
-# print loss
-# plt.plot(metrics["xent"], label="xent", color="pink")
-# plt.plot(metrics["repulsion_loss"], label="repulsion_loss", color="lightblue")
-plt.plot(metrics["source_val_xent"], label="source_val_xent", color="red")
-plt.plot(metrics["target_val_weighted_repulsion_loss"], label="target_val_repulsion_loss", color="blue")
-plt.plot(metrics["val_weighted_loss"], label="val_loss", color="green")
-plt.legend()
-plt.yscale("log")
-plt.show()
-if not is_notebook():
-    plt.close()
-plt.savefig(f"{exp_dir}/val_loss.png")
-
-
-# In[ ]:
-
-
-# print metrics
-# plot acc_0 and acc_1 and acc_0_alt and acc_1_alt
-plt.plot(metrics["epoch_acc_0"], label="acc_0", color="blue")
-plt.plot(metrics["epoch_acc_1"], label="acc_1", color="green")
-plt.plot(metrics["epoch_acc_0_alt"], label="acc_0_alt", color="lightblue")
-plt.plot(metrics["epoch_acc_1_alt"], label="acc_1_alt", color="lightgreen")
-plt.legend()
-plt.show()
-plt.savefig(f"{exp_dir}/acc.png")
-
-
-# In[ ]:
-
-
-# find index of minimum val_weighted_loss, target_val_weighted_repulsion_loss 
-min_val_weighted_loss_idx = np.argmin(metrics["val_weighted_loss"])
-min_target_val_weighted_repulsion_loss_idx = np.argmin(metrics["target_val_weighted_repulsion_loss"])
-# get maximum acc (max of max(acc_0, acc_1))
-accs = np.maximum(np.array(metrics["epoch_acc_0"]), np.array(metrics["epoch_acc_1"]))
-max_acc_idx = np.argmax(accs)
-print(f"max_acc_idx: {max_acc_idx}")
-print(f"min_val_weighted_loss_idx: {min_val_weighted_loss_idx}")
-print(f"min_target_val_weighted_repulsion_loss_idx: {min_target_val_weighted_repulsion_loss_idx}")
-# get accs for min val_weighted_loss and min target_val_weighted_repulsion_loss 
-val_weighted_loss_acc = accs[min_val_weighted_loss_idx]
-target_val_weighted_repulsion_loss_acc = accs[min_target_val_weighted_repulsion_loss_idx]
-max_acc = accs[max_acc_idx]
-
-# plot max_acc, val_weighted_loss_acc, target_val_weighted_repulsion_loss_acc as a bar chart 
-plt.bar(["max", "weighted_loss", "weighted_repulsion_loss"], [max_acc, val_weighted_loss_acc, target_val_weighted_repulsion_loss_acc])
-# show y ticks at every 0.1 
-plt.yticks(np.arange(0, 1.1, 0.1))
-plt.show()
-plt.savefig(f"{exp_dir}/max_acc_model_selection.png")
 

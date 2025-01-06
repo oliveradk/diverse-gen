@@ -9,6 +9,7 @@ from torchvision import transforms
 from wilds.datasets.waterbirds_dataset import WaterbirdsDataset
 from wilds.datasets.wilds_dataset import WILDSDataset, WILDSSubset
 
+# TODO: look into balanced target loader (see if DivDis, D-BAT uses one)
 
 class CustomWaterbirdsDataset(WaterbirdsDataset):
     def __getitem__(self, idx):
@@ -22,9 +23,13 @@ def get_waterbirds_datasets(
     mix_rate: Optional[float] = 0.5,
     source_cc: bool = True,
     transform: Optional[Callable] = None, 
+    convert_to_tensor: bool = True,
     val_split: float = 0.2, 
+    target_val_split: float = 0.0
 ):
-    transform_list = [transforms.ToTensor()]
+    transform_list = []
+    if convert_to_tensor:
+        transform_list.append(transforms.ToTensor())
     if transform is not None:
         transform_list.append(transform)
     transform = transforms.Compose(transform_list)
@@ -81,7 +86,7 @@ def get_waterbirds_datasets(
     )
     target_train, target_val = random_split(
         target, 
-        [round(len(target) * (1 - val_split)), round(len(target) * val_split)], 
+        [round(len(target) * (1 - target_val_split)), round(len(target) * target_val_split)], 
         generator=torch.Generator().manual_seed(42)
     )
 
