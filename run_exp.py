@@ -31,31 +31,6 @@ if not is_notebook():
 # In[ ]:
 
 
-# thoughts: waterbirds results seem like a scam (very specific hyperparams, we'll see if they replicate)
-# if they do, its probably a result of extreme overfitting (unless they really tuned it on source validation acc, which I highly doubt)
-# if it does'nt replicate, I might email the authors, confirom the hyperparmeters, run them on their setup 
-# could also experiment with unidirection ace 
-
-
-# In[ ]:
-
-
-# TODO: want to measure worst-group performance on CelebA, Waterbirds, Camelyon 
-# also maybe want to evaluate performance according to even split eval grouper? (if that's how its done in prier work)
-
-# NOTE: inspired by "group adjustments of 1/sqrt(n_g)" in Sagawa (which is motivated by Cao 2019 https://arxiv.org/pdf/1906.07413), 
-# we should plaussibly improve performance via a principled-reweighting (might be especially relevant for low mix rates)
-
-
-# In[ ]:
-
-
-# hmm - could apply the group adjustments from group dro 
-
-
-# In[ ]:
-
-
 import os
 import math
 import json
@@ -99,6 +74,7 @@ from spurious_datasets.cifar_mnist import get_cifar_mnist_datasets
 from spurious_datasets.fmnist_mnist import get_fmnist_mnist_datasets
 from spurious_datasets.toy_grid import get_toy_grid_datasets
 from spurious_datasets.waterbirds import get_waterbirds_datasets
+from spurious_datasets.cub import get_cub_datasets
 from spurious_datasets.camelyon import get_camelyon_datasets
 from spurious_datasets.multi_nli import get_multi_nli_datasets
 from spurious_datasets.civil_comments import get_civil_comments_datasets
@@ -115,7 +91,7 @@ from utils.act_utils import get_acts_and_labels, plot_activations, transform_act
 
 @dataclass
 class Config():
-    seed: int = 0
+    seed: int = 1
     dataset: str = "waterbirds"
     loss_type: LossType = LossType.DIVDIS
     batch_size: int = 32
@@ -142,6 +118,7 @@ class Config():
     target_01_mix_rate_lower_bound: Optional[float] = None
     target_10_mix_rate_lower_bound: Optional[float] = None
     pseudo_label_all_groups: bool = False
+    shuffle_target: bool = True
     inbalance_ratio: Optional[bool] = False
     lr: float = 1e-3
     weight_decay: float = 1e-4 # 1e-4
@@ -203,7 +180,7 @@ conf = Config()
 # In[ ]:
 
 
-# if conf.dataset == "waterbirds" and conf.loss_type == LossType.DIVDIS:
+# if conf.dataset in ["waterbirds", "cub"] and conf.loss_type == LossType.DIVDIS:
 #     conf.lr = 1e-3
 #     conf.weight_decay = 1e-4
 #     conf.epochs = 100
@@ -287,9 +264,9 @@ tokenizer = None
 if conf.model == "Resnet50":
     from torchvision import models
     from torchvision.models.resnet import ResNet50_Weights
-    resnet_builder = lambda: models.resnet50(pretrained=True) # models.resnet50(weights=ResNet50_Weights.DEFAULT)    
+    resnet_builder = lambda: models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)    
     model_builder = lambda: torch.nn.Sequential(*list(resnet_builder().children())[:-1])
-    resnet_50_transforms = ResNet50_Weights.DEFAULT.transforms()
+    resnet_50_transforms = ResNet50_Weights.IMAGENET1K_V1.transforms()
     model_transform = transforms.Compose([
         transforms.Resize(resnet_50_transforms.resize_size * 2, interpolation=resnet_50_transforms.interpolation),
         transforms.CenterCrop(resnet_50_transforms.crop_size),
@@ -372,32 +349,21 @@ elif conf.dataset == "fmnist_mnist":
         pad_sides=pad_sides
     )
 elif conf.dataset == "waterbirds":
-    # transformation exactly copied from DivDis paper https://github.com/yoonholee/DivDis/blob/main/subpopulation/data/cub_dataset.py
-    target_resolution = (224, 224)
-    scale = 256.0 / 224.0
-    model_transform = transforms.Compose(
-            [
-                transforms.Resize(
-                    (
-                        int(target_resolution[0] * scale),
-                        int(target_resolution[1] * scale),
-                    )
-                ),
-                transforms.CenterCrop(target_resolution),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-            ]
-        )
-
     source_train, source_val, target_train, target_val, target_test = get_waterbirds_datasets(
         mix_rate=conf.mix_rate, 
         source_cc=conf.source_cc,
         transform=model_transform, 
-        convert_to_tensor=False,
+        convert_to_tensor=True,
         val_split=conf.source_val_split,
-        target_val_split=conf.target_val_split
+        target_val_split=conf.target_val_split,
+        reverse_order=False, # NOTE: set to True to recover divdis implmentation
+        reverse_target=False # set to true to set how reversing (+ not shulffing) effects performance (True should degrade worst group performance)
     )
     collate_fn = source_train.dataset.collate
+elif conf.dataset == "cub":
+    source_train, target_train, target_test = get_cub_datasets()
+    source_val = []
+    target_val = []
 elif conf.dataset.startswith("celebA"):
     if conf.dataset == "celebA-0":
         gt_feat = "Blond_Hair"
@@ -456,7 +422,7 @@ else:
 
 
 # plot image 
-img, y, gl = source_train[0]
+img, y, gl = source_train[-1]
 # pad 
 # to PIL image 
 
@@ -474,8 +440,8 @@ if is_img and img.dim() == 3 and is_notebook():
 
 # plot target train images with vision_utils.make_grid
 if is_img and img.dim() == 3 and is_notebook():
-    cifar_mnist_grid = torch.stack([target_train[i][0] for i in range(20)])
-    grid_img = vision_utils.make_grid(cifar_mnist_grid, nrow=10, normalize=True, padding=1)
+    img_tensor_grid = torch.stack([target_train[i][0] for i in range(20)])
+    grid_img = vision_utils.make_grid(img_tensor_grid, nrow=10, normalize=True, padding=1)
     plt.imshow(grid_img.permute(1, 2, 0))
     plt.show()
 
@@ -484,13 +450,30 @@ if is_img and img.dim() == 3 and is_notebook():
 
 
 # data loaders 
+# if conf.dataset == "cub":
+#     loader_kwargs = {
+#         "batch_size": conf.batch_size,
+#         "num_workers": 4,
+#         "pin_memory": True,
+#     }
+
+#     source_train_loader = source_train.get_loader(
+#         train=True, reweight_groups=None, **loader_kwargs
+#     )
+#     target_train_loader = target_train.get_loader(
+#         train=False, reweight_groups=None, **loader_kwargs
+#     )
+#     target_test_loader = target_test.get_loader(
+#         train=False, reweight_groups=None, **loader_kwargs
+#     )
 source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
 if len(source_val) > 0:
-    source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
-target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+    source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=conf.num_workers)
+# NOTE: shuffle "should" be true, but in divdis code its false, and this leads to substantial changes in worst goup result
+target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=conf.shuffle_target, collate_fn=collate_fn, num_workers=conf.num_workers)
 if len(target_val) > 0:
-    target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
-target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+    target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=False, collate_fn=collate_fn, num_workers=conf.num_workers)
+target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=conf.num_workers)
 
 # classifiers
 from transformers import get_cosine_schedule_with_warmup
