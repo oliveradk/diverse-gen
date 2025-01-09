@@ -1,71 +1,58 @@
+from abc import abstractmethod
 from typing import Optional, Callable
 import os
+from PIL import Image
 
 import numpy as np
 import pandas as pd
 
 import torch
-from torch.utils.data import random_split
+from torch.utils.data import Dataset, random_split, Subset
 from torchvision import transforms
 
-from wilds.common.grouper import CombinatorialGrouper
-from wilds.datasets.waterbirds_dataset import WaterbirdsDataset
-from wilds.datasets.wilds_dataset import WILDSDataset, WILDSSubset
+from spurious_datasets.utils import (
+    get_group_idxs, 
+    update_idxs_from_mix_rate
+)
 
-# TODO: look into balanced target loader (see if DivDis, D-BAT uses one)
 
-class CustomWaterbirdsDataset(WaterbirdsDataset):
 
-    # def __init__(self, version=None, root_dir='data', download=False, split_scheme='official'):
-    #     self._version = version
-    #     self._data_dir = self.initialize_data_dir(root_dir, download)
+class WaterbirdsDataset(Dataset):
+    # download from https://worksheets.codalab.org/rest/bundles/0x505056d5cdea4e4eaa0e242cbfe2daa4/contents/blob/
+    def __init__(self, data_dir: str, transform: Optional[Callable] = None, 
+                 idxs: Optional[np.ndarray]=None):
+        self.data_dir = data_dir
+        self.transform = transform
 
-    #     if not os.path.exists(self.data_dir):
-    #         raise ValueError(
-    #             f'{self.data_dir} does not exist yet. Please generate the dataset first.')
-
-    #     # Read in metadata
-    #     # Note: metadata_df is one-indexed.
-    #     metadata_df = pd.read_csv(
-    #         os.path.join(self.data_dir, 'metadata.csv'))
-
-    #     # Get the y values
-    #     self._y_array = torch.LongTensor(metadata_df['y'].values)
-    #     self._y_size = 1
-    #     self._n_classes = 2
-
-    #     self._metadata_array = torch.stack(
-    #         (torch.LongTensor(metadata_df['place'].values), self._y_array),
-    #         dim=1
-    #     )
-    #     self._metadata_fields = ['background', 'y']
-    #     self._metadata_map = {
-    #         'background': [' land', 'water'], # Padding for str formatting
-    #         'y': [' landbird', 'waterbird']
-    #     }
-
-    #     # Extract filenames
-    #     self._input_array = metadata_df['img_filename'].values
-    #     self._original_resolution = (224, 224)
-
-    #     # Extract splits
-    #     self._split_scheme = split_scheme
-    #     if self._split_scheme != 'official':
-    #         raise ValueError(f'Split scheme {self._split_scheme} not recognized')
-    #     self._split_array = metadata_df['split'].values
-
-    #     self._eval_grouper = CombinatorialGrouper(
-    #         dataset=self,
-    #         groupby_fields=(['background', 'y']))
-
-    #     super(WaterbirdsDataset, self).__init__(root_dir, download, split_scheme)
+        # load dataset data
+        self.metadata_df = pd.read_csv(os.path.join(self.data_dir, "metadata.csv"))
+        self.labels = self.metadata_df["y"].values
+        self.feature_labels = self.metadata_df[["y", "place"]].values
+        self.filename_array = self.metadata_df["img_filename"].values
+        self.split_array = self.metadata_df["split"].values
+        self.idxs = idxs
+        if self.idxs is not None:
+            self.labels = self.labels[idxs]
+            self.feature_labels = self.feature_labels[idxs]
+            self.filename_array = self.filename_array[idxs]
+            self.split_array = self.split_array[idxs]
     
     def __getitem__(self, idx):
-        x, y, metadata = super().__getitem__(idx)
-        metadata = metadata[:2] # remove "from source domain" metadata 
-        # switch first and second element 
-        metadata = metadata[[1, 0]] # y, background
-        return x, y, metadata
+        filename = self.filename_array[idx]
+        img_path = os.path.join(self.data_dir, filename)
+        img = Image.open(img_path).convert('RGB')
+        img = self.transform(img)
+        y = torch.tensor(self.labels[idx])
+        feature_labels = torch.tensor(self.feature_labels[idx])
+        return img, y, feature_labels
+    
+    def __len__(self):
+        return len(self.labels)
+
+def get_split(dataset, idxs):
+    if dataset.idxs is not None:
+        idxs = dataset.idxs[idxs]
+    return WaterbirdsDataset(data_dir=dataset.data_dir, transform=dataset.transform, idxs=idxs)
 
 def get_waterbirds_datasets(
     mix_rate: Optional[float] = 0.5,
@@ -74,8 +61,7 @@ def get_waterbirds_datasets(
     convert_to_tensor: bool = True,
     val_split: float = 0.2, 
     target_val_split: float = 0.0, 
-    reverse_order: bool = False,
-    reverse_target: bool = False
+    dataset_length: Optional[int]=None,
 ):
     transform_list = []
     if convert_to_tensor:
@@ -84,77 +70,43 @@ def get_waterbirds_datasets(
         transform_list.append(transform)
     transform = transforms.Compose(transform_list)
 
-    dataset = CustomWaterbirdsDataset(root_dir="./data/waterbirds", download=True)
+    dataset = WaterbirdsDataset(data_dir="./data/waterbirds/waterbirds_v1.0", transform=transform)
 
-    # source 
-    source_mask = (dataset.split_array == 0)
-    if source_cc and reverse_order:
-        # use same indexing as with cub, grouping indexes by group (0, 0), (1, 1)
-        # TODO: figure out why this is wrong / not aligned with cub
-        source_idxs = np.where(source_mask)[0]
-        group_0_idxs = np.where(torch.all(dataset.metadata_array[source_idxs][:, :2] == torch.tensor([0,0]), dim=1))[0]
-        group_1_idxs = np.where(torch.all(dataset.metadata_array[source_idxs][:, :2] == torch.tensor([1,1]), dim=1))[0]
-        source_cc_idxs = np.concatenate([group_0_idxs, group_1_idxs])
-        source_idxs = source_idxs[source_cc_idxs]
-    else: 
-        if source_cc:
-            source_mask = source_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy()
-        source_idxs = np.where(source_mask)[0]
+    source_idxs = np.where(dataset.split_array == 0)[0]
+    target_idxs = np.where(dataset.split_array == 1)[0]
+    test_idxs = np.where(dataset.split_array == 2)[0]
+    if dataset_length is not None:
+        source_idxs = source_idxs[:dataset_length]
+        target_idxs = target_idxs[:dataset_length]
+        test_idxs = test_idxs[:dataset_length]
+    source, target, test = get_split(dataset, source_idxs), get_split(dataset, target_idxs), get_split(dataset, test_idxs)
 
-
-    # target 
-    if mix_rate is None: 
-        target_idxs = np.where(dataset.split_array == 1)[0]
-    else:
-        target_mask = dataset.split_array == 1
-        # compute current mix rate 
-        num_ood = (dataset.metadata_array[target_mask][:, 0] != dataset.metadata_array[target_mask][:, 1]).sum().item()
-        num_id = (dataset.metadata_array[target_mask][:, 0] == dataset.metadata_array[target_mask][:, 1]).sum().item()
-        cur_mix_rate = num_ood / sum(target_mask)
-        # if less than target, remove ood instances (iid = ood/mix_rate - ood)
-        if cur_mix_rate < mix_rate:
-            num_id_target = int((num_ood / mix_rate) - num_ood)
-            id_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy())[0]
-            id_idxs = id_idxs[:num_id_target]
-            ood_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] != dataset.metadata_array[:, 1]).numpy())[0]
-        else: # if greate than target, remove iid instances (ood = ood/mix_rate - id)
-            # mix rate = (ood) / (ood + id)
-            # -> (ood + id) * mix rate = ood 
-            # -> mix_rate -1 * ood = - id * mix rate 
-            # -> ood = id * mix rate / (1 - mix rate)
-            num_ood_target = int(num_id * mix_rate / (1 - mix_rate))
-            ood_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] != dataset.metadata_array[:, 1]).numpy())[0]
-            ood_idxs = ood_idxs[:num_ood_target]
-            id_idxs = np.where(target_mask & (dataset.metadata_array[:, 0] == dataset.metadata_array[:, 1]).numpy())[0]
+    if source_cc: 
+        cc_groups = [np.array([0, 0]), np.array([1, 1])]
+        cc_idxs = get_group_idxs(source.feature_labels, cc_groups)
+        source = get_split(source, cc_idxs)
     
-        target_idxs = np.concatenate([id_idxs, ood_idxs])
-    
-    if reverse_target:
-        target_idxs = target_idxs[::-1]
-
-    # test 
-    test_mask = dataset.split_array == 2
-    test_idxs = np.where(test_mask)[0]
-
-    # create datasets
-    source = WILDSSubset(dataset, source_idxs, transform)
-    target = WILDSSubset(dataset, target_idxs, transform)
-    test = WILDSSubset(dataset, test_idxs, transform)
+    # update target idxs based on mix rate (preserves group balance)
+    if mix_rate is not None:
+        target_idxs = update_idxs_from_mix_rate(target.feature_labels, mix_rate)
+        target = get_split(target, target_idxs)
 
     # split datasets
     if val_split > 0:
+        source_train_size = int(len(source) * (1 - val_split))
         source_train, source_val = random_split(
             source, 
-            [round(len(source) * (1 - val_split)), round(len(source) * val_split)],
+            [source_train_size, len(source) - source_train_size],
             generator=torch.Generator().manual_seed(42)
         )
     else:
         source_train = source 
         source_val = []
     if target_val_split > 0:
+        target_train_size = int(len(target) * (1 - target_val_split))
         target_train, target_val = random_split(
             target, 
-            [round(len(target) * (1 - target_val_split)), round(len(target) * target_val_split)], 
+            [target_train_size, len(target) - target_train_size], 
             generator=torch.Generator().manual_seed(42)
         )
     else:
