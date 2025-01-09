@@ -108,10 +108,10 @@ def generate_data(
     return x, y, g
 
 def get_toy_grid_datasets(
-    source_mix_rate_0_1=0.0,
-    source_mix_rate_1_0=0.0,
-    target_mix_rate_0_1=0.5,
-    target_mix_rate_1_0=0.5,
+    source_mix_rate_0_1: int | None = None,
+    source_mix_rate_1_0: int | None = None,
+    target_mix_rate_0_1: int | None = None,
+    target_mix_rate_1_0: int | None = None,
     gaussian=False,
     std=0.1, 
     source_size=500, 
@@ -119,6 +119,15 @@ def get_toy_grid_datasets(
     val_size=250,
     test_size=500
 ):
+    # set default mix rates
+    if source_mix_rate_0_1 is None:
+        source_mix_rate_0_1 = 0.0
+    if source_mix_rate_1_0 is None:
+        source_mix_rate_1_0 = 0.0
+    if target_mix_rate_0_1 is None:
+        target_mix_rate_0_1 = 0.5
+    if target_mix_rate_1_0 is None:
+        target_mix_rate_1_0 = 0.5
     source_non_mix_rate = 1 - source_mix_rate_0_1 - source_mix_rate_1_0
     source_quadrant_proportions = [source_mix_rate_0_1, source_non_mix_rate / 2, source_mix_rate_1_0, source_non_mix_rate / 2]
     target_non_mix_rate = 1 - target_mix_rate_0_1 - target_mix_rate_1_0

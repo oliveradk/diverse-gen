@@ -10,13 +10,23 @@ from .dominos import gen_dominos_dataset, mnist_transform
 
 def get_cifar_mnist_datasets(
     vertical=True, 
-    source_mix_rate_0_1=0.0,
-    source_mix_rate_1_0=0.0,
-    target_mix_rate_0_1=0.5, 
-    target_mix_rate_1_0=0.5, 
+    source_mix_rate_0_1: int | None = None,
+    source_mix_rate_1_0: int | None = None,
+    target_mix_rate_0_1: int | None = None, 
+    target_mix_rate_1_0: int | None = None, 
     transform=None, 
     pad_sides=False
 ):
+    # set default mix rates
+    if source_mix_rate_0_1 is None:
+        source_mix_rate_0_1 = 0.0
+    if source_mix_rate_1_0 is None:
+        source_mix_rate_1_0 = 0.0
+    if target_mix_rate_0_1 is None:
+        target_mix_rate_0_1 = 0.5
+    if target_mix_rate_1_0 is None:
+        target_mix_rate_1_0 = 0.5
+
     # get full datasets 
     mnist_train = torchvision.datasets.MNIST('./data/mnist/', train=True, download=True, transform=mnist_transform)
     cifar_train = torchvision.datasets.CIFAR10('./data/cifar10/', train=True, download=True, transform=transforms.ToTensor())
