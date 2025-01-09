@@ -188,6 +188,7 @@ conf = Config()
 #     conf.batch_size = 16 
 #     conf.target_batch_size = 16
 #     conf.aux_weight = 10.0
+#     conf.shuffle_target = False
 
 
 
@@ -647,17 +648,35 @@ def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: b
 
 
 from torch.utils.tensorboard import SummaryWriter
+class Logger():
+    def __init__(self, exp_dir):
+        self.exp_dir = exp_dir
+        self.metrics = defaultdict(list)
+        self.tb_writer = SummaryWriter(log_dir=exp_dir)
+    
+    def add_scalar(self, parition, name, value, step=None, to_metrics=True, to_tb=True):
+        if to_metrics:
+            self.metrics[f"{parition}_{name}"].append(value)
+        if to_tb:
+            self.tb_writer.add_scalar(f"{parition}/{name}", value, step)
 
-writer = SummaryWriter(log_dir=conf.exp_dir)
+    def flush(self):
+        self.tb_writer.flush()
+        # save metrics to json
+        with open(f"{self.exp_dir}/metrics.json", "w") as f:
+            json.dump(self.metrics, f, indent=4)
 
 
 # In[ ]:
 
 
 from itertools import product
+
 def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluating"): 
     # compute average and group wise loss and accuracy 
     n_features = gl.shape[1]
+
+    group_label_ls = list(product(range(2), repeat=n_features))
 
     # loss 
     losses = [0]
@@ -665,16 +684,16 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
     # accuracy 
     total_corrects_by_groups = {
         group_label: torch.zeros(conf.heads)
-        for group_label in product(range(2), repeat=n_features)
+        for group_label in group_label_ls
     }
     total_corrects_alt_by_groups = {
         group_label: torch.zeros(conf.heads)
-        for group_label in product(range(2), repeat=n_features)
+        for group_label in group_label_ls
     }
     total_samples = 0
     total_samples_by_groups = {
         group_label: 0
-        for group_label in product(range(2), repeat=n_features)
+        for group_label in group_label_ls
     }
     
     with torch.no_grad():
@@ -724,12 +743,16 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
     if loss_fn is not None:
         metrics["loss"] = torch.mean(torch.tensor(losses)).item()
     # group acc per head
-    for group_label in product(range(2), repeat=n_features):
+    for group_label in group_label_ls:
         for i in range(conf.heads): 
             metrics[f"acc_{i}_{group_label}"] = (total_corrects_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
             metrics[f"acc_alt_{i}_{group_label}"] = (total_corrects_alt_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
+    # worst group acc per head
+    for i in range(conf.heads):
+        metrics[f"worst_acc_{i}"] = min([metrics[f"acc_{i}_{group_label}"] for group_label in group_label_ls])
+
     # add group counts 
-    for group_label in product(range(2), repeat=n_features):
+    for group_label in group_label_ls:
         metrics[f"count_{group_label}"] = total_samples_by_groups[group_label]
 
     return metrics
@@ -740,121 +763,120 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
 
 # TODO: change diciotary values to source loss, target loss
 from itertools import cycle
-# train_loader = zip(source_train_loader, cycle(target_train_loader))
-# loader_len = len(source_train_loader)
-metrics = defaultdict(list)
-# target_iter = iter(target_train_loader)
-if conf.freeze_heads:
-    # freeze second head 
-    net.freeze_head(1)
-for epoch in range(conf.epochs):
-    train_loader = zip(source_train_loader, cycle(target_train_loader))
-    loader_len = len(source_train_loader)
-    # train
-    for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
-        # source
-        x, y, gl = to_device(*source_batch, conf.device)
-        if conf.freeze_heads and epoch == conf.head_1_epochs:
-            net.unfreeze_head(1)
-            net.freeze_head(0)
-        logits = net(x)
-        losses = compute_src_losses(logits, y, gl) # hmm, in the DivDis implementation looks like they take a mean for each head, then take the mean of means (I thin this is the)
-        xent = torch.mean(torch.stack(losses))
-        writer.add_scalar("train/source_loss", xent.item(), epoch * loader_len + batch_idx)
-        # target
-        target_x, target_y, target_gl = to_device(*target_batch, conf.device)
-        target_logits = net(target_x)
-        target_loss = loss_fn(target_logits)
-        writer.add_scalar("train/target_loss", target_loss.item(), epoch * loader_len + batch_idx)
-        writer.add_scalar("train/weighted_target_loss", conf.aux_weight * target_loss.item(), epoch * loader_len + batch_idx)
-        if conf.freeze_heads and epoch < conf.head_1_epochs:
-            target_loss = torch.tensor(0.0, device=conf.device)
-        # full loss 
-        full_loss = conf.source_weight * xent + conf.aux_weight * target_loss
-        opt.zero_grad()
-        full_loss.backward()
-        opt.step()
-        if scheduler is not None:
-            scheduler.step()
-
-        metrics[f"source_loss"].append(xent.item())
-        metrics[f"target_loss"].append(target_loss.item())
-    
-    # eval
-    if (epoch + 1) % 1 == 0:
-        net.eval()
-        ### Validation 
-        # source validation 
-        total_val_loss = 0.0
-        src_loss_fn = lambda x, y, gl: sum(compute_src_losses(x, y, gl))
-        if len(source_val) > 0:
-            source_val_metrics = eval(net, source_val_loader, conf.device, src_loss_fn, use_labels=True, stage="Source Val")
-            for k, v in source_val_metrics.items():
-                if 'count' not in k:
-                    metrics[f"val_source_{k}"].append(v)
-            total_val_loss += source_val_metrics["loss"]
-            writer.add_scalar("val/source_loss", source_val_metrics["loss"], epoch)
-        # target validation 
-        weighted_target_val_loss = 0.0
-        if len(target_val) > 0:  
-            target_val_metrics = eval(net, target_val_loader, conf.device, loss_fn, use_labels=False, stage="Target Val")
-            for k, v in target_val_metrics.items():
-                if 'count' not in k:
-                    metrics[f"val_target_{k}"].append(v)
-            weighted_target_val_loss = target_val_metrics["loss"] * conf.aux_weight
-            metrics["val_target_weighted_loss"].append(weighted_target_val_loss)
-            total_val_loss += weighted_target_val_loss
-        metrics["val_loss"].append(total_val_loss)
-        writer.add_scalar("val/val_loss", total_val_loss, epoch)
-
-        ### Test
-        target_test_metrics = eval(net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test")
-        for k, v in target_test_metrics.items():
-            if 'count' not in k:
-                metrics[f"test_{k}"].append(v)
-        # write test metrics to tensorboard
-        for k, v in target_test_metrics.items():
-            if 'count' not in k:
-                writer.add_scalar(f"test/{k}", v, epoch)
-
-
-        ### Print Results
-        print(f"Epoch {epoch + 1} Eval Results:")
-        # print validation losses
-        if len(source_val) > 0:
-            print(f"Source validation loss: {metrics[f'val_source_loss'][-1]:.4f}")
-        if len(target_val) > 0:
-            print(f"Target validation loss {metrics[f'val_target_loss'][-1]:.4f}")
-        print(f"Validation loss: {metrics[f'val_loss'][-1]:.4f}")
-        if len(target_val) > 0:
-            for group_label in product(range(2), repeat=gl.shape[1]):
-                print(f"Group {group_label} validation count: {target_val_metrics[f'count_{group_label}']}")
-        # print test accuracies (total and group)
-        print("\n=== Test Accuracies ===")
-        # Overall accuracy for each head
-        print("\nOverall Accuracies:")
-        for i in range(conf.heads):
-            print(f"Head {i}:  Main: {metrics[f'test_acc_{i}'][-1]:.4f}  |  Alt: {metrics[f'test_acc_alt_{i}'][-1]:.4f}")
-        # Group-wise accuracies
-        print("\nGroup-wise Accuracies:")
-        for group_label in product(range(2), repeat=gl.shape[1]):
-            print(f"\nGroup {group_label}, count: {target_test_metrics[f'count_{group_label}']}:")
-            for i in range(conf.heads):
-                print(f"Head {i}:  Main: {metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}  |  Alt: {metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}")
-
-        # plot activations 
-        if conf.plot_activations:   
-            fig = plot_activations(
-                model=net.backbone, loader=target_test_loader, device=conf.device
-            )
-            fig.savefig(f"{exp_dir}/activations_{epoch}.png")
-            plt.close()
+logger = Logger(exp_dir)
+try:
+    if conf.freeze_heads:
+        # freeze second head (for dbat)
+        net.freeze_head(1)
+    for epoch in range(conf.epochs):
+        train_loader = zip(source_train_loader, cycle(target_train_loader))
+        loader_len = len(source_train_loader)
+        # train
+        for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
+            
+            # freeze heads for dbat
+            if conf.freeze_heads and epoch == conf.head_1_epochs: 
+                net.unfreeze_head(1)
+                net.freeze_head(0)
+            
+            # source
+            x, y, gl = to_device(*source_batch, conf.device)
+            logits = net(x)
+            losses = compute_src_losses(logits, y, gl)
+            xent = torch.mean(torch.stack(losses))
+            logger.add_scalar("train", "source_loss", xent.item(), epoch * loader_len + batch_idx)
+            
+            # target
+            target_x, target_y, target_gl = to_device(*target_batch, conf.device)
+            target_logits = net(target_x)
+            target_loss = loss_fn(target_logits)
+            logger.add_scalar("train", "target_loss", target_loss.item(), epoch * loader_len + batch_idx)
+            logger.add_scalar("train", "weighted_target_loss", conf.aux_weight * target_loss.item(), epoch * loader_len + batch_idx, to_metrics=False, to_tb=True)
+            # don't compute target loss before second head begins training
+            if conf.freeze_heads and epoch < conf.head_1_epochs: 
+                target_loss = torch.tensor(0.0, device=conf.device)
+            
+            # full loss 
+            full_loss = conf.source_weight * xent + conf.aux_weight * target_loss
+            logger.add_scalar("train", "loss", full_loss.item(), epoch * loader_len + batch_idx)
+            
+            # backprop
+            opt.zero_grad()
+            full_loss.backward()
+            opt.step()
+            if scheduler is not None:
+                scheduler.step()
         
-        net.train()
+        # eval
+        if (epoch + 1) % 1 == 0:
+            net.eval()
+            ### Validation 
+            # source
+            total_val_loss = 0.0
+            total_val_weighted_loss = 0.0
+            if len(source_val) > 0:
+                src_loss_fn = lambda x, y, gl: sum(compute_src_losses(x, y, gl))
+                source_val_metrics = eval(net, source_val_loader, conf.device, src_loss_fn, use_labels=True, stage="Source Val")
+                for k, v in source_val_metrics.items():
+                    if 'count' not in k:
+                        logger.add_scalar("val", f"source_{k}", v, epoch)
+                total_val_loss += source_val_metrics["loss"]
+                total_val_weighted_loss += total_val_loss
+            # target
+            weighted_target_val_loss = 0.0
+            if len(target_val) > 0:  
+                target_val_metrics = eval(net, target_val_loader, conf.device, loss_fn, use_labels=False, stage="Target Val")
+                for k, v in target_val_metrics.items():
+                    if 'count' not in k:
+                        logger.add_scalar("val", f"target_{k}", v, epoch)
+                weighted_target_val_loss = target_val_metrics["loss"] * conf.aux_weight
+                logger.add_scalar("val", "target_weighted_loss", weighted_target_val_loss, epoch)
+                total_val_loss += target_val_metrics["loss"]    
+                total_val_weighted_loss += weighted_target_val_loss
+            # total
+            logger.add_scalar("val", "loss", total_val_loss, epoch)
+            logger.add_scalar("val", "weighted_loss", total_val_weighted_loss, epoch)
 
-metrics = dict(metrics)
-# save metrics 
-import json 
-with open(f"{exp_dir}/metrics.json", "w") as f:
-    json.dump(metrics, f, indent=4)
+            ### Test
+            target_test_metrics = eval(net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test")
+            for k, v in target_test_metrics.items():
+                if 'count' not in k:
+                    logger.add_scalar("test", k, v, epoch)
+
+
+            ### Print Results
+            print(f"Epoch {epoch + 1} Eval Results:")
+            # print validation losses
+            if len(source_val) > 0:
+                print(f"Source validation loss: {logger.metrics['val_source_loss'][-1]:.4f}")
+            if len(target_val) > 0:
+                print(f"Target validation loss {logger.metrics['val_target_loss'][-1]:.4f}")
+            print(f"Validation loss: {logger.metrics['val_loss'][-1]:.4f}")
+            if len(target_val) > 0:
+                for group_label in product(range(2), repeat=gl.shape[1]):
+                    print(f"Group {group_label} validation count: {target_val_metrics[f'count_{group_label}']}")
+            # print test accuracies (total and group)
+            print("\n=== Test Accuracies ===")
+            # Overall accuracy for each head
+            print("\nOverall Accuracies:")
+            for i in range(conf.heads):
+                print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}'][-1]:.4f}  |  Alt: {logger.metrics[f'test_acc_alt_{i}'][-1]:.4f}")
+            # Group-wise accuracies
+            print("\nGroup-wise Accuracies:")
+            for group_label in product(range(2), repeat=gl.shape[1]):
+                print(f"\nGroup {group_label}, count: {target_test_metrics[f'count_{group_label}']}:")
+                for i in range(conf.heads):
+                    print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}  |  Alt: {logger.metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}")
+
+            # plot activations 
+            if conf.plot_activations:   
+                fig = plot_activations(
+                    model=net.backbone, loader=target_test_loader, device=conf.device
+                )
+                fig.savefig(f"{exp_dir}/activations_{epoch}.png")
+                plt.close()
+            
+            net.train()
+finally:
+    logger.flush()
 
