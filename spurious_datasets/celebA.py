@@ -27,7 +27,7 @@ def load_celebA_dfs(root_dir: str):
 
 class CelebA(Dataset):
     def __init__(self, 
-        data_dir: str | None = None, gt_feat: str='Male', spur_feat: str='Blond_Hair', 
+        data_dir: str, gt_feat: str='Male', spur_feat: str='Blond_Hair', 
         inv_spur_feat: bool=False, transform: Optional[Callable]=None, 
         idxs: Optional[np.ndarray]=None, attrs_df: Optional[pd.DataFrame]=None, 
         splits_df: Optional[pd.DataFrame]=None
@@ -47,7 +47,7 @@ class CelebA(Dataset):
         
         self.labels = self.attrs_df[gt_feat].values
         self.feature_labels = self.attrs_df[[gt_feat, spur_feat]].values
-        self.filename_array = self.attrs_df.index.values
+        self.filename_array = self.attrs_df['index'].values
         self.split_array = self.splits_df.iloc[:, 1].values
         self.idxs = idxs
         if self.idxs is not None:
@@ -73,7 +73,7 @@ class CelebA(Dataset):
 def get_split(dataset, idxs):
     if dataset.idxs is not None:
         idxs = dataset.idxs[idxs]
-    return CelebA(gt_feat=dataset.gt_feat, spur_feat=dataset.spur_feat, 
+    return CelebA(data_dir=dataset.data_dir, gt_feat=dataset.gt_feat, spur_feat=dataset.spur_feat, 
                   transform=dataset.transform, idxs=idxs, attrs_df=dataset.attrs_df, splits_df=dataset.splits_df)
     
 
@@ -96,8 +96,9 @@ def get_celebA_datasets(
         transform_list.append(transform)
     transform = transforms.Compose(transform_list)
     
-    attrs_df, splits_df = load_celebA_dfs("./data/img_align_celeba")
-    dataset = CelebA(gt_feat=gt_feat, spur_feat=spur_feat, inv_spur_feat=inv_spur_feat, 
+    data_dir = "./data/img_align_celeba"
+    attrs_df, splits_df = load_celebA_dfs(data_dir)
+    dataset = CelebA(data_dir=data_dir, gt_feat=gt_feat, spur_feat=spur_feat, inv_spur_feat=inv_spur_feat, 
                      transform=transform, attrs_df=attrs_df, splits_df=splits_df)
 
     source_idx = np.where(dataset.split_array == 0)[0]

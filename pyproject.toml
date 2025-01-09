@@ -25,6 +25,7 @@ wilds = "^2.0.0"
 ipdb = "^0.13.13"
 tensorboard = "^2.18.0"
 accelerate = "^1.2.0"
+nevergrad = "^1.0.8"
 
 
 [build-system]

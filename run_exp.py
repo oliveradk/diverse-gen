@@ -92,8 +92,8 @@ from utils.act_utils import get_acts_and_labels, plot_activations, transform_act
 @dataclass
 class Config():
     seed: int = 1
-    dataset: str = "waterbirds"
-    loss_type: LossType = LossType.DIVDIS
+    dataset: str = "celebA-0"
+    loss_type: LossType = LossType.TOPK
     batch_size: int = 32
     target_batch_size: int = 64
     epochs: int = 10
@@ -356,11 +356,8 @@ elif conf.dataset == "waterbirds":
         transform=model_transform, 
         convert_to_tensor=True,
         val_split=conf.source_val_split,
-        target_val_split=conf.target_val_split,
-        reverse_order=False, # NOTE: set to True to recover divdis implmentation
-        reverse_target=False # set to true to set how reversing (+ not shulffing) effects performance (True should degrade worst group performance)
+        target_val_split=conf.target_val_split
     )
-    collate_fn = source_train.dataset.collate
 elif conf.dataset == "cub":
     source_train, target_train, target_test = get_cub_datasets()
     source_val = []
@@ -490,6 +487,8 @@ if conf.optimizer == "adamw":
     opt = torch.optim.AdamW(net.parameters(), lr=conf.lr, weight_decay=conf.weight_decay)
 elif conf.optimizer == "sgd":
     opt = torch.optim.SGD(net.parameters(), lr=conf.lr, weight_decay=conf.weight_decay, momentum=0.9)
+else: 
+    raise ValueError(f"Optimizer {conf.optimizer} not supported")
 num_steps = conf.epochs * len(source_train_loader)
 if conf.lr_scheduler == "cosine":       
     scheduler = get_cosine_schedule_with_warmup(
