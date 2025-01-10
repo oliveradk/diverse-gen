@@ -1,22 +1,16 @@
-import json
-from functools import partial
-from typing import Optional, Literal, Callable
 from tqdm import tqdm
-from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from copy import deepcopy
 from datetime import datetime
+from itertools import product
+import json
 
 import submitit
 from submitit.core.utils import CommandFunction
 import nevergrad as ng
 import numpy as np
-import matplotlib.pyplot as plt
-
 
 from losses.loss_types import LossType
-from utils.exp_utils import get_executor, get_executor_local, run_experiments
+from utils.exp_utils import get_executor
 from utils.utils import conf_to_args
 
 
@@ -27,11 +21,11 @@ param_space = ng.p.Dict(
     optimizer=ng.p.Choice(["sgd", "adamw"]), 
 )
 
-n_trials = 64 
-num_workers = 8 
+n_trials = 64
+num_workers = 8
 
 
-SCRIPT_NAME = "run_exp.py"
+SCRIPT_NAME = "spur_corr_exp.py"
 
 loss_configs = {
     "DivDis": {"loss_type": LossType.DIVDIS},
@@ -51,7 +45,7 @@ env_configs = {
     # {"dataset": "multi-nli", "model": "bert", "epochs": 10, "lr": 1e-5}
 }
 
-mix_rates = [0.1, 0.5]
+mix_rates = [0.5] # TODO: 0.1
 
 
 # maye need to move this to utils to pickle properly 
@@ -76,11 +70,8 @@ class ExperimentCommandFunction(CommandFunction):
         with open(exp_dir / "metrics.json", "r") as f:
             metrics = json.load(f)
         # get metric value
-        metric_val = metrics[self.metric]
+        metric_val = min(metrics[self.metric])
         return metric_val
-
-
-optimizer = ng.optimizers.RandomSearch(parametrization=param_space, budget=n_trials, num_workers=num_workers)
 
 
 # TODO: specify validation split for each dataset (probably 10%?)
@@ -92,22 +83,34 @@ results_file = Path(hparam_dir, "results.json")
 results_file.touch()
 results = {}
 
+configs = list(product(env_configs.items(), loss_configs.items(), mix_rates))
+for (env_name, env_config), (loss_name, loss_config), mix_rate in tqdm(configs, desc="Sweeping"):
+    conf = {**env_config, **loss_config, "mix_rate": mix_rate}
+    exp_key = f"{env_name}_{loss_name}_{mix_rate}"
+    sweep_dir = Path(hparam_dir, exp_key)
+    executor = get_executor(sweep_dir)
+    exp_cmd_func = ExperimentCommandFunction(SCRIPT_NAME, conf, "val_loss", sweep_dir)
+    optimizer = ng.optimizers.RandomSearch(parametrization=param_space, budget=n_trials, num_workers=num_workers)
+    try: 
+        recommendation = optimizer.minimize(exp_cmd_func, executor=executor, batch_mode=True, verbosity=2)
+    except Exception as e:
+        optimizer.dump(Path(sweep_dir, "optimizer.pkl"))
+        continue
 
-for env_name, env_config in env_configs.items():
-    for loss_name, loss_config in loss_configs.items():
-        for mix_rate in mix_rates:
-            conf = {**env_config, **loss_config, "mix_rate": mix_rate}
-            exp_key = f"{env_name}_{loss_name}_{mix_rate}"
+    # store search results 
+    sweep_results = [
+        {"params": {k: v.value for k, v in value.parameter.items()}, 
+         "loss": value.mean}
+        for value in optimizer.archive.values()
+    ]
+    with open(Path(sweep_dir, "search_results.json"), "w") as f:
+        json.dump(sweep_results, f, indent=4)
 
-            sweep_dir = Path(hparam_dir, exp_key)
-            executor = get_executor(sweep_dir)
-            exp_cmd_func = ExperimentCommandFunction(SCRIPT_NAME, conf, "val_loss", sweep_dir)
-            recommendation = optimizer.minimize(exp_cmd_func, executor=executor, batch_mode=True)
+    # store experiment result (best parameters)
+    results[exp_key] = {
+        "params": recommendation.value,
+        "loss": recommendation.loss
+    }
+    with open(results_file, "w") as f:
+        json.dump(results, f, indent=4)
 
-            results[exp_key] = {
-                "params": recommendation.value,
-                "loss": recommendation.loss
-            }
-
-        with open(results_file, "w") as f:
-            json.dump(results, f)

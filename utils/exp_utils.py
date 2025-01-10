@@ -13,7 +13,7 @@ def get_executor(out_dir: Optional[Path] = None, gpu_type: str | None = None):
     executor.update_parameters(
         timeout_min=60 * 48,
         mem_gb=16,
-        gres=f"gpu{':' + gpu_type if gpu_type is not None else ''}:1",
+        slurm_gres=f"gpu{':' + gpu_type if gpu_type is not None else ''}:1",
         cpus_per_task=4,
         nodes=1,
         slurm_qos="high",
