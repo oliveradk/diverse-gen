@@ -70,7 +70,7 @@ class ExperimentCommandFunction(CommandFunction):
         with open(exp_dir / "metrics.json", "r") as f:
             metrics = json.load(f)
         # get metric value
-        metric_val = min(metrics[self.metric])
+        metric_val = np.nanmin(metrics[self.metric])
         return metric_val
 
 
@@ -95,6 +95,10 @@ for (env_name, env_config), (loss_name, loss_config), mix_rate in tqdm(configs, 
         recommendation = optimizer.minimize(exp_cmd_func, executor=executor, batch_mode=True, verbosity=2)
     except Exception as e:
         optimizer.dump(Path(sweep_dir, "optimizer.pkl"))
+        print(e)
+        # save error message
+        with open(Path(sweep_dir, "error.txt"), "w") as f:
+            f.write(str(e))
         continue
 
     # store search results 

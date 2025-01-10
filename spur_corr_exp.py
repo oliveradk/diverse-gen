@@ -738,29 +738,29 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
     }
     
     with torch.no_grad():
-        for test_x, test_y, test_gl in tqdm(loader, desc=stage):
-            test_x, test_y, test_gl = to_device(test_x, test_y, test_gl, conf.device)
-            test_logits = model(test_x)
+        for x, y, gl in tqdm(loader, desc=stage):
+            x, y, gl = to_device(x, y, gl, conf.device)
+            logits = model(x)
             # print(test_logits.shape)
-            total_samples += test_logits.size(0)
+            total_samples += logits.size(0)
             if use_labels and loss_fn is not None:
-                loss = loss_fn(test_logits, test_y, test_gl)
+                loss = loss_fn(logits, y, gl)
             elif loss_fn is not None:
-                loss = loss_fn(test_logits)
+                loss = loss_fn(logits)
             else: 
                 loss = torch.tensor(0.0, device=conf.device)
             if torch.isnan(loss):
                 print(f"Warning: Nan Loss (likely due to batch size and target loss) "
-                f"Batch size: {test_logits.size(0)}, Loss: {conf.loss_type}")
+                f"Batch size: {logits.size(0)}, Loss: {conf.loss_type}")
             else:
                 losses.append(loss)
 
             # parition instances into groups based on group labels 
             logits_by_group = {}
             for group_label in product(range(2), repeat=n_features):
-                group_label_mask = torch.all(test_gl == torch.tensor(group_label).to(device), dim=1)
+                group_label_mask = torch.all(gl == torch.tensor(group_label).to(device), dim=1)
                 # print("group label mask", group_label_mask.shape)
-                logits_by_group[group_label] = test_logits[group_label_mask]
+                logits_by_group[group_label] = logits[group_label_mask]
             # print("group logit shapes", [v.shape for v in logits_by_group.values()])
             
             for group_label, group_logits in logits_by_group.items():
@@ -782,7 +782,7 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
         metrics[f"acc_alt_{i}"] = (total_corrects_alt[i] / total_samples).item()
     
     if loss_fn is not None:
-        metrics["loss"] = torch.mean(torch.tensor(losses)).item()
+        metrics["loss"] = torch.nanmean(torch.tensor(losses)).item()
     # group acc per head
     for group_label in group_label_ls:
         for i in range(conf.heads): 
@@ -823,7 +823,7 @@ try:
             x, y, gl = to_device(*source_batch, conf.device)
             logits = net(x)
             losses = compute_src_losses(logits, y, gl)
-            xent = torch.mean(torch.stack(losses))
+            xent = torch.nanmean(torch.stack(losses))
             logger.add_scalar("train", "source_loss", xent.item(), epoch * loader_len + batch_idx)
             
             # target
