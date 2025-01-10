@@ -27,12 +27,16 @@ num_workers = 8
 
 SCRIPT_NAME = "spur_corr_exp.py"
 
+HPARM_PARENT_DIR = Path("output/subpopulation_hparam_sweep")
+hparam_dir_name = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+hparam_dir = Path(HPARM_PARENT_DIR, hparam_dir_name)
+hparam_dir.mkdir(exist_ok=True, parents=True)
+
 loss_configs = {
     "DivDis": {"loss_type": LossType.DIVDIS},
-    # "TopK": {"loss_type": LossType.TOPK},
+    "DBAT": {"loss_type": LossType.DBAT, "shared_backbone": False, "freeze_heads": True, "batch_size": 16, "target_batch_size": 32},
     "TopK 0.1": {"loss_type": LossType.TOPK, "mix_rate_lower_bound": 0.1},
     "TopK 0.5": {"loss_type": LossType.TOPK, "mix_rate_lower_bound": 0.5},
-    "DBAT": {"loss_type": LossType.DBAT, "shared_backbone": False, "freeze_heads": True, "batch_size": 16, "target_batch_size": 32},
     "ERM": {"loss_type": LossType.ERM}
 }
 
@@ -46,6 +50,20 @@ env_configs = {
 }
 
 mix_rates = [0.5] # TODO: 0.1
+
+configs = list(product(env_configs.items(), loss_configs.items(), mix_rates))
+
+# to_skip = [
+#     ("TopK 0.1", "toy_grid"), 
+#     ("TopK 0.5", "toy_grid"), 
+#     ("ERM", "toy_grid"), 
+#     ("TopK 0.1", "fmnist_mnist"), 
+#     ("TopK 0.5", "fmnist_mnist"), 
+#     ("ERM", "fmnist_mnist"), 
+#     ("TopK 0.1", "cifar_mnist"), 
+#     ("ERM", "cifar_mnist"), 
+# ]
+# configs = [conf for conf in configs if (conf[2], conf[0]) not in to_skip]
 
 
 # maye need to move this to utils to pickle properly 
@@ -74,16 +92,11 @@ class ExperimentCommandFunction(CommandFunction):
         return metric_val
 
 
-# TODO: specify validation split for each dataset (probably 10%?)
-HPARM_PARENT_DIR = Path("output/subpopulation_hparam_sweep")
-hparam_dir = Path(HPARM_PARENT_DIR, datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
-hparam_dir.mkdir(exist_ok=True, parents=True)
 
 results_file = Path(hparam_dir, "results.json")
 results_file.touch()
 results = {}
 
-configs = list(product(env_configs.items(), loss_configs.items(), mix_rates))
 for (env_name, env_config), (loss_name, loss_config), mix_rate in tqdm(configs, desc="Sweeping"):
     conf = {**env_config, **loss_config, "mix_rate": mix_rate}
     exp_key = f"{env_name}_{loss_name}_{mix_rate}"
