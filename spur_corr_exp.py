@@ -482,7 +482,7 @@ class DivisibleBatchSampler(torch.utils.data.Sampler):
         # If we need more indices to make complete batches,
         # randomly sample from existing indices
         if self.total_size > self.dataset_size:
-            extra_indices = self.rnd.choices(indices, k=self.total_size - self.dataset_size)
+            extra_indices = self.rng.choices(indices, k=self.total_size - self.dataset_size)
             indices.extend(extra_indices)
             
         assert len(indices) == self.total_size
