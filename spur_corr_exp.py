@@ -92,7 +92,7 @@ from utils.act_utils import get_acts_and_labels, plot_activations, transform_act
 @dataclass
 class Config():
     seed: int = 1
-    dataset: str = "cifar_mnist"
+    dataset: str = "waterbirds"
     loss_type: LossType = LossType.DIVDIS
     batch_size: int = 32
     target_batch_size: int = 64
@@ -329,7 +329,9 @@ else:
 
 
 collate_fn = None
+# TODO: there should be varaible n_classes for each feature 
 classes = 2
+n_features = 2 
 is_img = True
 alt_index = 1
 
@@ -714,13 +716,10 @@ class Logger():
 from itertools import product
 
 def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluating"): 
-    # compute average and group wise loss and accuracy 
-    n_features = gl.shape[1]
-
-    group_label_ls = list(product(range(2), repeat=n_features))
+    group_label_ls = list(product(range(classes), repeat=n_features))
 
     # loss 
-    losses = [0]
+    losses = []
 
     # accuracy 
     total_corrects_by_groups = {
@@ -757,7 +756,7 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
 
             # parition instances into groups based on group labels 
             logits_by_group = {}
-            for group_label in product(range(2), repeat=n_features):
+            for group_label in group_label_ls:
                 group_label_mask = torch.all(gl == torch.tensor(group_label).to(device), dim=1)
                 # print("group label mask", group_label_mask.shape)
                 logits_by_group[group_label] = logits[group_label_mask]
@@ -782,7 +781,7 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
         metrics[f"acc_alt_{i}"] = (total_corrects_alt[i] / total_samples).item()
     
     if loss_fn is not None:
-        metrics["loss"] = torch.nanmean(torch.tensor(losses)).item()
+        metrics["loss"] = torch.mean(torch.tensor(losses)).item()
     # group acc per head
     for group_label in group_label_ls:
         for i in range(conf.heads): 
@@ -823,7 +822,7 @@ try:
             x, y, gl = to_device(*source_batch, conf.device)
             logits = net(x)
             losses = compute_src_losses(logits, y, gl)
-            xent = torch.nanmean(torch.stack(losses))
+            xent = torch.mean(torch.stack(losses))
             logger.add_scalar("train", "source_loss", xent.item(), epoch * loader_len + batch_idx)
             
             # target
