@@ -180,6 +180,16 @@ conf = Config()
 # In[ ]:
 
 
+# if conf.loss_type == LossType.DBAT:
+#     conf.shared_backbone = False 
+#     conf.freeze_heads = True
+#     conf.batch_size = 16
+#     conf.target_batch_size = 32
+
+
+# In[ ]:
+
+
 # if conf.dataset in ["waterbirds", "cub"] and conf.loss_type == LossType.DIVDIS:
 #     conf.lr = 1e-3
 #     conf.weight_decay = 1e-4
@@ -356,7 +366,8 @@ elif conf.dataset == "waterbirds":
         transform=model_transform, 
         convert_to_tensor=True,
         val_split=conf.source_val_split,
-        target_val_split=conf.target_val_split
+        target_val_split=conf.target_val_split, 
+        dataset_length=conf.dataset_length
     )
 elif conf.dataset == "cub":
     source_train, target_train, target_test = get_cub_datasets()
@@ -479,7 +490,7 @@ if conf.shared_backbone:
     net = MultiHeadBackbone(model_builder(), conf.heads, feature_dim, classes if not conf.binary else 1)
 else:
     print("warning, not using shared backbone untested")
-    net = MultiNetModel(heads=conf.heads, model_builder=model_builder, feature_dim=feature_dim)
+    net = MultiNetModel(model_builder=model_builder, n_heads=conf.heads, feature_dim=feature_dim, classes=classes)
 net = net.to(conf.device)
 
 # optimizer

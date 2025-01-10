@@ -7,16 +7,22 @@ from utils.utils import batch_size
 
 class MultiNetModel(nn.Module): 
     
-    def __init__(self, heads: int, model_builder: Callable[[], nn.Module], feature_dim: int) -> None:
+    def __init__(self, 
+                 model_builder: Callable[[], nn.Module], n_heads: int, feature_dim: int, 
+                 classes: int) -> None:
         super().__init__()
-        self.backbones = nn.ModuleList([model_builder() for _ in range(heads)])
-        self.heads = nn.ModuleList([nn.Linear(feature_dim, 1) for _ in range(heads)])
+        self.n_heads = n_heads
+        self.classes = classes
+        self.backbones = nn.ModuleList([model_builder() for _ in range(n_heads)])
+        self.heads = nn.ModuleList([nn.Linear(feature_dim, classes) for _ in range(n_heads)])
+    
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = batch_size(x)
         features = [backbone(x).view(bs, -1) for backbone in self.backbones]
         outs = [head(feature) for head, feature in zip(self.heads, features)]
         out = torch.cat(outs, dim=-1)
+        out = out.view(bs, self.n_heads * self.classes) # for parity with multi-head backbone
         return out
     
     def freeze_head(self, head_idx: int):
