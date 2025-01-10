@@ -92,8 +92,8 @@ from utils.act_utils import get_acts_and_labels, plot_activations, transform_act
 @dataclass
 class Config():
     seed: int = 1
-    dataset: str = "waterbirds"
-    loss_type: LossType = LossType.TOPK
+    dataset: str = "cifar_mnist"
+    loss_type: LossType = LossType.DIVDIS
     batch_size: int = 32
     target_batch_size: int = 64
     epochs: int = 10
@@ -458,31 +458,62 @@ if is_img and img.dim() == 3 and is_notebook():
 # In[ ]:
 
 
-# data loaders 
-# if conf.dataset == "cub":
-#     loader_kwargs = {
-#         "batch_size": conf.batch_size,
-#         "num_workers": 4,
-#         "pin_memory": True,
-#     }
+class DivisibleBatchSampler(torch.utils.data.Sampler):
+    def __init__(self, dataset_size: int, batch_size: int, shuffle: bool = True):
+        self.dataset_size = dataset_size
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        
+        # Calculate number of complete batches and total samples needed
+        self.num_batches = math.ceil(dataset_size / batch_size)
+        self.total_size = self.num_batches * batch_size
 
-#     source_train_loader = source_train.get_loader(
-#         train=True, reweight_groups=None, **loader_kwargs
-#     )
-#     target_train_loader = target_train.get_loader(
-#         train=False, reweight_groups=None, **loader_kwargs
-#     )
-#     target_test_loader = target_test.get_loader(
-#         train=False, reweight_groups=None, **loader_kwargs
-#     )
-source_train_loader = DataLoader(source_train, batch_size=conf.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=conf.num_workers)
+    def __iter__(self):
+        # Generate indices for the entire dataset
+        indices = list(range(self.dataset_size))
+        
+        if self.shuffle:
+            # Shuffle all indices
+            rnd.shuffle(indices)
+            
+        # If we need more indices to make complete batches,
+        # randomly sample from existing indices
+        if self.total_size > self.dataset_size:
+            extra_indices = rnd.choices(indices, k=self.total_size - self.dataset_size)
+            indices.extend(extra_indices)
+            
+        assert len(indices) == self.total_size
+        return iter(indices)
+
+    def __len__(self):
+        return self.total_size
+
+
+# In[ ]:
+
+
+source_train_loader = DataLoader(
+    source_train, batch_size=conf.batch_size, num_workers=conf.num_workers, 
+    sampler=DivisibleBatchSampler(len(source_train), conf.batch_size, shuffle=True), 
+)
 if len(source_val) > 0:
-    source_val_loader = DataLoader(source_val, batch_size=conf.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=conf.num_workers)
+    source_val_loader = DataLoader(
+        source_val, batch_size=conf.batch_size, num_workers=conf.num_workers, 
+        sampler=DivisibleBatchSampler(len(source_val), conf.batch_size, shuffle=False)
+    )
 # NOTE: shuffle "should" be true, but in divdis code its false, and this leads to substantial changes in worst goup result
-target_train_loader = DataLoader(target_train, batch_size=conf.target_batch_size, shuffle=conf.shuffle_target, collate_fn=collate_fn, num_workers=conf.num_workers)
+target_train_loader = DataLoader(
+    target_train, batch_size=conf.target_batch_size, num_workers=conf.num_workers, 
+    sampler=DivisibleBatchSampler(len(target_train), conf.target_batch_size, shuffle=conf.shuffle_target)
+)
 if len(target_val) > 0:
-    target_val_loader = DataLoader(target_val, batch_size=conf.target_batch_size, shuffle=False, collate_fn=collate_fn, num_workers=conf.num_workers)
-target_test_loader = DataLoader(target_test, batch_size=conf.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=conf.num_workers)
+    target_val_loader = DataLoader(
+        target_val, batch_size=conf.target_batch_size, num_workers=conf.num_workers, 
+        sampler=DivisibleBatchSampler(len(target_val), conf.target_batch_size, shuffle=False)
+    )
+target_test_loader = DataLoader(
+    target_test, batch_size=conf.batch_size, num_workers=conf.num_workers, shuffle=False
+)
 
 # classifiers
 from transformers import get_cosine_schedule_with_warmup
@@ -783,7 +814,6 @@ try:
         loader_len = len(source_train_loader)
         # train
         for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
-            
             # freeze heads for dbat
             if conf.freeze_heads and epoch == conf.head_1_epochs: 
                 net.unfreeze_head(1)
