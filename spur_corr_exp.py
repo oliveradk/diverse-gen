@@ -465,6 +465,7 @@ class DivisibleBatchSampler(torch.utils.data.Sampler):
         self.dataset_size = dataset_size
         self.batch_size = batch_size
         self.shuffle = shuffle
+        self.rng = rnd.Random(42)
         
         # Calculate number of complete batches and total samples needed
         self.num_batches = math.ceil(dataset_size / batch_size)
@@ -476,12 +477,12 @@ class DivisibleBatchSampler(torch.utils.data.Sampler):
         
         if self.shuffle:
             # Shuffle all indices
-            rnd.shuffle(indices)
+            self.rng.shuffle(indices)
             
         # If we need more indices to make complete batches,
         # randomly sample from existing indices
         if self.total_size > self.dataset_size:
-            extra_indices = rnd.choices(indices, k=self.total_size - self.dataset_size)
+            extra_indices = self.rnd.choices(indices, k=self.total_size - self.dataset_size)
             indices.extend(extra_indices)
             
         assert len(indices) == self.total_size
