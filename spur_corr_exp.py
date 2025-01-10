@@ -92,7 +92,7 @@ from utils.act_utils import get_acts_and_labels, plot_activations, transform_act
 @dataclass
 class Config():
     seed: int = 1
-    dataset: str = "celebA-0"
+    dataset: str = "waterbirds"
     loss_type: LossType = LossType.TOPK
     batch_size: int = 32
     target_batch_size: int = 64
@@ -105,8 +105,8 @@ class Config():
     aux_weight: float = 1.0
     use_group_labels: bool = False
     source_cc: bool = True
-    source_val_split: float = 0.0
-    target_val_split: float = 0.0
+    source_val_split: float = 0.2
+    target_val_split: float = 0.2
     source_mix_rate: Optional[float] = 0.0
     source_01_mix_rate: Optional[float] = None
     source_10_mix_rate: Optional[float] = None
