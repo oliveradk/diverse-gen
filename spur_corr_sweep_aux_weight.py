@@ -34,7 +34,7 @@ loss_configs = {
 }
 
 env_configs = {
-    "toy_grid": {"dataset": "toy_grid", "model": "toy_model", "epochs": 100, "batch_size": 32, "target_batch_size": 128, "lr": 1e-3, "optim": "sgd"},
+    "toy_grid": {"dataset": "toy_grid", "model": "toy_model", "epochs": 100, "batch_size": 32, "target_batch_size": 128, "lr": 1e-3, "optimizer": "sgd"},
     "fmnist_mnist": {"dataset": "fmnist_mnist", "model": "Resnet50", "epochs": 5},
     "cifar_mnist": {"dataset": "cifar_mnist", "model": "Resnet50", "epochs": 5},
     "waterbirds": {"dataset": "waterbirds", "model": "Resnet50", "epochs": 5},
