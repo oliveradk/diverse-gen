@@ -93,10 +93,10 @@ from utils.act_utils import get_acts_and_labels, plot_activations, transform_act
 class Config():
     seed: int = 1
     dataset: str = "waterbirds"
-    loss_type: LossType = LossType.DIVDIS
+    loss_type: LossType = LossType.TOPK
     batch_size: int = 32
     target_batch_size: int = 64
-    epochs: int = 10
+    epochs: int = 5
     heads: int = 2
     binary: bool = False
     model: str = "Resnet50"
@@ -114,15 +114,15 @@ class Config():
     target_01_mix_rate: Optional[float] = None
     target_10_mix_rate: Optional[float] = None
     aggregate_mix_rate: bool = False
-    mix_rate_lower_bound: Optional[float] = 0.5
+    mix_rate_lower_bound: Optional[float] = 0.1
     target_01_mix_rate_lower_bound: Optional[float] = None
     target_10_mix_rate_lower_bound: Optional[float] = None
     pseudo_label_all_groups: bool = False
     shuffle_target: bool = True
     inbalance_ratio: Optional[bool] = False
-    lr: float = 1e-3
-    weight_decay: float = 1e-4 # 1e-4
-    optimizer: str = "sgd"
+    lr: float = 1e-4
+    weight_decay: float = 1e-3 # 1e-4
+    optimizer: str = "adamw"
     lr_scheduler: Optional[str] = None 
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
@@ -175,6 +175,26 @@ def post_init(conf: Config, overrides: list[str]=[]):
 
 
 conf = Config()
+
+
+# In[ ]:
+
+
+# if conf.dataset in ["waterbirds", "celebA-0", "celebA-1", "celebA-2", "toy_grid"]:
+#     if conf.loss_type == LossType.TOPK and conf.mix_rate_lower_bound == 0.1:
+#         conf.aux_weight = 7.0 
+#     else:
+#         conf.aux_weight = 2.0
+
+
+# In[ ]:
+
+
+# if conf.dataset == "toy_grid": 
+#     conf.lr = 1e-3
+#     conf.optimizer = "sgd"
+#     conf.model = "toy_model"
+#     conf.epochs = 128
 
 
 # In[ ]:
@@ -892,15 +912,19 @@ try:
             if len(target_val) > 0:
                 print(f"Target validation loss {logger.metrics['val_target_loss'][-1]:.4f}")
             print(f"Validation loss: {logger.metrics['val_loss'][-1]:.4f}")
-            if len(target_val) > 0:
-                for group_label in product(range(2), repeat=gl.shape[1]):
-                    print(f"Group {group_label} validation count: {target_val_metrics[f'count_{group_label}']}")
+            # if len(target_val) > 0:
+            #     for group_label in product(range(2), repeat=gl.shape[1]):
+            #         print(f"Group {group_label} validation count: {target_val_metrics[f'count_{group_label}']}")
             # print test accuracies (total and group)
             print("\n=== Test Accuracies ===")
             # Overall accuracy for each head
             print("\nOverall Accuracies:")
             for i in range(conf.heads):
                 print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}'][-1]:.4f}  |  Alt: {logger.metrics[f'test_acc_alt_{i}'][-1]:.4f}")
+            # Worst group accuracy for each head
+            print("\nWorst Group Accuracies:")
+            for i in range(conf.heads):
+                print(f"Head {i}:  Worst: {logger.metrics[f'test_worst_acc_{i}'][-1]:.4f}")
             # Group-wise accuracies
             print("\nGroup-wise Accuracies:")
             for group_label in product(range(2), repeat=gl.shape[1]):
