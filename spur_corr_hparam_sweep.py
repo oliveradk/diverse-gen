@@ -4,14 +4,12 @@ from datetime import datetime
 from itertools import product
 import json
 
-import submitit
-from submitit.core.utils import CommandFunction
 import nevergrad as ng
 import numpy as np
 
 from losses.loss_types import LossType
-from utils.exp_utils import get_executor
-from utils.utils import conf_to_args
+from utils.exp_utils import get_executor, ExperimentCommandFunction
+
 
 
 param_space = ng.p.Dict(
@@ -53,44 +51,6 @@ mix_rates = [0.5] # TODO: 0.1
 
 configs = list(product(env_configs.items(), loss_configs.items(), mix_rates))
 
-# to_skip = [
-#     ("TopK 0.1", "toy_grid"), 
-#     ("TopK 0.5", "toy_grid"), 
-#     ("ERM", "toy_grid"), 
-#     ("TopK 0.1", "fmnist_mnist"), 
-#     ("TopK 0.5", "fmnist_mnist"), 
-#     ("ERM", "fmnist_mnist"), 
-#     ("TopK 0.1", "cifar_mnist"), 
-#     ("ERM", "cifar_mnist"), 
-# ]
-# configs = [conf for conf in configs if (conf[2], conf[0]) not in to_skip]
-
-
-# maye need to move this to utils to pickle properly 
-class ExperimentCommandFunction(CommandFunction):
-    def __init__(self, script_name: str, conf: dict, metric: str, parent_dir: Path):
-        self.conf = conf
-        self.metric = metric
-        self.parent_dir = parent_dir
-        assert "exp_dir" not in conf, "exp_dir should not be in conf"
-        super().__init__(["python", script_name] + conf_to_args(conf))
-    
-    def __call__(self, params: dict):
-        # set exp dir 
-        exp_dir = Path(self.parent_dir, "_".join([f"{k}-{v}" for k, v in params.items()]))
-        # randomly generate seed 
-        seed = np.random.randint(10000)
-        # convert to args
-        param_args = conf_to_args({**params, "exp_dir": exp_dir, "seed": seed})
-        # run experiment 
-        _result = super().__call__(*param_args) # relying on this to return only when the experiment is complete 
-        # load metrics 
-        with open(exp_dir / "metrics.json", "r") as f:
-            metrics = json.load(f)
-        # get metric value
-        metric_val = np.nanmin(metrics[self.metric])
-        return metric_val
-
 
 
 results_file = Path(hparam_dir, "results.json")
@@ -101,7 +61,7 @@ for (env_name, env_config), (loss_name, loss_config), mix_rate in tqdm(configs, 
     conf = {**env_config, **loss_config, "mix_rate": mix_rate}
     exp_key = f"{env_name}_{loss_name}_{mix_rate}"
     sweep_dir = Path(hparam_dir, exp_key)
-    executor = get_executor(sweep_dir)
+    executor = get_executor(sweep_dir, mem_gb=32)
     exp_cmd_func = ExperimentCommandFunction(SCRIPT_NAME, conf, "val_loss", sweep_dir)
     optimizer = ng.optimizers.RandomSearch(parametrization=param_space, budget=n_trials, num_workers=num_workers)
     try: 

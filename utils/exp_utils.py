@@ -1,24 +1,39 @@
 from typing import Optional
 from pathlib import Path
-import submitit
 from datetime import datetime
-from dataclasses import dataclass
+import json
+
+import numpy as np
+import submitit
+from submitit.helpers import CommandFunction
+
 from utils.utils import conf_to_args
 
-def get_executor(out_dir: Optional[Path] = None, gpu_type: str | None = None):
+
+def get_executor(
+    out_dir: Optional[Path] = None, 
+    gpu_type: str | None = None, 
+    mem_gb: int = 16, 
+    timeout_min: int = 60 * 48,
+    cpus_per_task: int = 4,
+    nodes: int = 1,
+    slurm_qos: str = "high",
+    slurm_array_parallelism: int = 8,
+    slurm_exclude: str = "ddpg.ist.berkeley.edu,dqn.ist.berkeley.edu" # large sharded gpu's - often causes OOM issues
+):
     if out_dir is None:
         out_dir = Path(f"output_logs/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
         out_dir.mkdir(exist_ok=True, parents=True)
     executor = submitit.AutoExecutor(folder=out_dir)
     executor.update_parameters(
-        timeout_min=60 * 48,
-        mem_gb=16,
+        timeout_min=timeout_min,
+        mem_gb=mem_gb,
         slurm_gres=f"gpu{':' + gpu_type if gpu_type is not None else ''}:1",
-        cpus_per_task=4,
-        nodes=1,
-        slurm_qos="high",
-        slurm_array_parallelism=8, 
-        slurm_exclude="ddpg.ist.berkeley.edu,dqn.ist.berkeley.edu" # large sharded gpu's - often causes OOM issues
+        cpus_per_task=cpus_per_task,
+        nodes=nodes,
+        slurm_qos=slurm_qos,
+        slurm_array_parallelism=slurm_array_parallelism, 
+        slurm_exclude=slurm_exclude
     )
     return executor
 
@@ -42,3 +57,28 @@ def run_experiments(executor, experiments: list, script_name: str):
         )
         jobs.append(executor.submit(function))
     return jobs
+
+
+class ExperimentCommandFunction(CommandFunction):
+    def __init__(self, script_name: str, conf: dict, metric: str, parent_dir: Path):
+        self.conf = conf
+        self.metric = metric
+        self.parent_dir = parent_dir
+        assert "exp_dir" not in conf, "exp_dir should not be in conf"
+        super().__init__(["python", script_name] + conf_to_args(conf))
+    
+    def __call__(self, params: dict):
+        # set exp dir 
+        exp_dir = Path(self.parent_dir, "_".join([f"{k}-{v}" for k, v in params.items()]))
+        # randomly generate seed 
+        seed = np.random.randint(10000)
+        # convert to args
+        param_args = conf_to_args({**params, "exp_dir": exp_dir, "seed": seed})
+        # run experiment 
+        _result = super().__call__(*param_args) # relying on this to return only when the experiment is complete 
+        # load metrics 
+        with open(exp_dir / "metrics.json", "r") as f:
+            metrics = json.load(f)
+        # get metric value
+        metric_val = np.nanmin(metrics[self.metric])
+        return metric_val
