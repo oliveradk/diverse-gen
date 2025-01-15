@@ -4,44 +4,42 @@ from itertools import product
 
 from scipy.stats import binom
 
-def compute_head_losses(
-        logits: t.Tensor, heads: int, classes: int, binary: bool = False
-):
-    # all paris of heads and labels 
-    # if heads=2, classes=3, then 
-    # [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)]
-    head_label_groups = list(product(range(heads), range(classes)))
-    device = logits.device
+def compute_head_losses(logits_per_head: list[t.Tensor], classes_per_head: list[int]):
+    # all pairs of heads and labels 
+    # e.g. if classes_per_head = [3, 2], then 
+    # [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]
+    head_label_groups = [(head, label) for head, classes in enumerate(classes_per_head) for label in range(classes)]
+    device = logits_per_head[0].device
 
     # define the criterion and label shape based on whether heads are binary or not
-    if binary: 
-        assert classes == 2
-        criterion = t.nn.functional.binary_cross_entropy_with_logits
-        label_shape = logits[:, 0].shape
-        dtype = logits.dtype
-    else:
-        criterion = t.nn.functional.cross_entropy
-        label_shape = (logits.shape[0],)
-        dtype = t.long
+    # if binary: 
+    #     assert classes == 2
+    #     criterion = t.nn.functional.binary_cross_entropy_with_logits
+    #     label_shape = logits[:, 0].shape
+    #     dtype = logits.dtype
+    # else:
+    criterion = t.nn.functional.cross_entropy
+    label_shape = (logits_per_head[0].shape[0],)
+    dtype = t.long
 
     # compute the loss for each head-label pair
     lossses = {}
     for (head, label) in head_label_groups:
         lossses[(head, label)] = criterion(
-            logits[:, head], t.ones(label_shape, dtype=dtype, device=device) * label, reduction='none'
+            logits_per_head[head], t.ones(label_shape, dtype=dtype, device=device) * label, reduction='none'
         )
     return lossses
 
 def compute_group_losses(
-        head_losses: dict[tuple[int, int], t.Tensor], heads: int, classes: int
+        head_losses: dict[tuple[int, int], t.Tensor], classes_per_head: list[int]
 ):
     # get all groups of heads and labels
-    # e.g. if heads=2, classes=3, then groups are 
-    # [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)]
-    groups = list(product(range(classes), repeat=heads))
+    # e.g. if classes_per_head = [3, 2], then 
+    # [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]
+    feature_label_ls = list(product(*[range(c) for c in classes_per_head]))
     group_losses = {}
-    for group in groups:
-        group_losses[group] = sum(head_losses[head, label] for head, label in enumerate(group))
+    for feature_label in feature_label_ls:
+        group_losses[feature_label] = sum(head_losses[head, label] for head, label in enumerate(feature_label))
     return group_losses
 
 def compute_loss(
@@ -64,30 +62,28 @@ def compute_loss(
 
 class ACELoss(t.nn.Module):
 
-
     def __init__(
         self, 
-        heads=2,
-        classes=2,
-        binary: bool = False,
+        classes_per_head: list[int] = [2, 2],
+        # binary: bool = False,
         mode: Literal['exp', 'prob', 'topk'] = 'exp',
-        inbalance_ratio: bool = False,
         mix_rate: Optional[float] = None,
         group_mix_rates: Optional[dict[tuple[int, ...], float]] = None,
-        pseudo_label_all_groups: bool = False,
+        disagree_only: bool = True,
         device: str = "cpu"
     ):
         super().__init__()
-        assert heads == 2
-        self.heads = heads # assume 2 heads for now
-        self.classes = classes
-        self.binary = binary
+        self.classes_per_head = classes_per_head
         self.mode = mode
-        self.inbalance_ratio = inbalance_ratio 
         self.mix_rate = mix_rate
         self.group_mix_rates = group_mix_rates
-        self.pseudo_label_all_groups = pseudo_label_all_groups
+        self.disagree_only = disagree_only
         self.device = device
+
+        if self.disagree_only:
+            assert all([c == self.classes_per_head[0] for c in self.classes_per_head])
+
+        assert (self.mix_rate is not None) ^ (self.group_mix_rates is not None) # carrot is xor
     
     def forward(self, logits, virtual_bs: Optional[int] = None):
         """
@@ -95,20 +91,20 @@ class ACELoss(t.nn.Module):
             logits (torch.Tensor): Input logits with shape [BATCH_SIZE, HEADS * CLASSES].
             (or [BATCH_SIZE, HEADS] if binary)
         """
-        assert logits.shape[1] == self.heads * self.classes if not self.binary else self.heads
+        assert logits.shape[1] == sum(self.classes_per_head)
         bs = logits.shape[0]
 
 
         # reshape logits to [BATCH_SIZE, HEADS, CLASSES] if not binary
-        if not self.binary:
-            logits = logits.view(bs, self.heads, self.classes)
+        # if not self.binary:
+        logits_per_head = logits.split(self.classes_per_head, dim=1)
         
         # compute losses for each head and each label (n_heads * n_classes)
-        head_losses = compute_head_losses(logits, self.heads, self.classes, self.binary)
+        head_losses = compute_head_losses(logits_per_head, self.classes_per_head)
         # compute losses for each group (a set of labels for each head)
-        group_losses = compute_group_losses(head_losses, self.heads, self.classes)
+        group_losses = compute_group_losses(head_losses, self.classes_per_head)
         # remove agreeing groups
-        if not self.pseudo_label_all_groups: 
+        if self.disagree_only: 
             group_losses = {group: loss for group, loss in group_losses.items() if len(set(group)) > 1}
        
         # min over the group index (so each instance only gets one pseudo-label)

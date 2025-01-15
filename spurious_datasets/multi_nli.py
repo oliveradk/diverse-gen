@@ -3,18 +3,39 @@ from functools import partial
 from typing import Optional
 import string 
 import json
+import random
 
+import numpy as np
+import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, random_split
 from datasets import load_dataset
 from tqdm import tqdm
 
+from spurious_datasets.utils import get_group_idxs, update_idxs_from_mix_rate
+
 
 class MultiNLIDataset(Dataset):
-    def __init__(self, dataset, tokenizer, max_length=128):
+    # OG dataset entailment (0), neutral (1), contradiction (2)
+    def __init__(self, dataset, tokenizer, max_length=128, combine_neut_entail=False, 
+                 idxs: Optional[np.ndarray]=None):
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.combine_neut_entail = combine_neut_entail
+        
+        labels = np.array(self.dataset["label"])
+        if self.combine_neut_entail: # convert to binary classification
+            labels = (labels == 2).astype(int) # 2:= contradiction
+        negation = np.array(self.dataset["sentence2_has_negation"])
+        
+        self.labels = labels
+        self.feature_labels = np.stack((labels, negation), axis=1)
+        self.idxs = idxs
+        if self.idxs is not None:
+            self.dataset = self.dataset.select(self.idxs)
+            self.labels = self.labels[self.idxs]
+            self.feature_labels = self.feature_labels[idxs]
 
     def __len__(self):
         return len(self.dataset)
@@ -33,18 +54,18 @@ class MultiNLIDataset(Dataset):
         )
         
         # Convert label to tensor
-        label = torch.tensor(item['label'])
-        # TODO: convert contradiction to 1
-        has_negation = torch.tensor(item["sentence2_has_negation"])
-        # contradition if negation else actual label
-        alt_label = torch.tensor(2) if has_negation else label
-        group_label = torch.stack((label, alt_label))
+        label = torch.tensor(self.labels[idx]).unsqueeze(-1)
+        group_label = torch.tensor(self.feature_labels[idx])
 
         encoding = {k:v.squeeze(0) for k, v in encoding.items()}
         
         return encoding, label, group_label
 
 
+def get_split(dataset: MultiNLIDataset, idxs: Optional[np.ndarray]):
+    if dataset.idxs is not None:
+        idxs = dataset.idxs[idxs]
+    return MultiNLIDataset(dataset.dataset, dataset.tokenizer, dataset.max_length, dataset.combine_neut_entail, idxs=idxs)
 
 
 def tokenize(s):
@@ -53,6 +74,7 @@ def tokenize(s):
     s = s.split(' ')
     return s
 
+
 def get_setence_has_negation(dataset):
     negation_words = ['nobody', 'no', 'never', 'nothing']
     setence_has_negation = []
@@ -60,11 +82,8 @@ def get_setence_has_negation(dataset):
         setence_has_negation.append(any(word in tokenize(example["hypothesis"]) for word in negation_words))
     return setence_has_negation
 
-neg_filename_train = "multinli_1.0_neg_train.jsonl"
-neg_filename_val = "multinli_1.0_neg_dev_matched.jsonl"
-neg_filename_test = "multinli_1.0_neg_dev_mismatched.jsonl"
 
-def load_negation_metadata(dataset, filename, data_dir):
+def load_negation_metadata(dataset, filename, data_dir) -> np.ndarray:
     if not os.path.exists(os.path.join(data_dir, filename)):
         negations = get_setence_has_negation(dataset)
         try: 
@@ -77,110 +96,91 @@ def load_negation_metadata(dataset, filename, data_dir):
     else: 
         with open(os.path.join(data_dir, filename), "r") as f:
             negations = [json.loads(line)["sentence2_has_negation"] for line in f]
-        return negations
+    return negations
 
-
-    
 
 def get_multi_nli_datasets(
     mix_rate: Optional[float]=None,
     source_cc: bool = True, 
     val_split=0.2,
+    target_val_split=0.2,
     tokenizer=None,
     max_length=128,
     dataset_length=None,
+    combine_neut_entail=False,
+    contra_no_neg=True
 ):
     assert tokenizer is not None, "Tokenizer is required"
     
     dataset = load_dataset("multi_nli")
     data_dir = "./data/multinli_1.0"
-    if dataset_length is not None:
-        dataset['train'] = dataset['train'].select(range(dataset_length))
-        dataset['validation_matched'] = dataset['validation_matched'].select(range(dataset_length))
-        dataset['validation_mismatched'] = dataset['validation_mismatched'].select(range(dataset_length))
+    neg_filename_train = "multinli_1.0_neg_train.jsonl"
+    neg_filename_val = "multinli_1.0_neg_dev_matched.jsonl"
+    neg_filename_test = "multinli_1.0_neg_dev_mismatched.jsonl"
 
     # get negation metadata
     negations_train = load_negation_metadata(dataset["train"], neg_filename_train, data_dir)
     negations_val = load_negation_metadata(dataset["validation_matched"], neg_filename_val, data_dir)
     negations_test = load_negation_metadata(dataset["validation_mismatched"], neg_filename_test, data_dir)
-
-    if dataset_length is not None:
-        negations_train = negations_train[:dataset_length]
-        negations_val = negations_val[:dataset_length]
-        negations_test = negations_test[:dataset_length]
     
     # add negation metadata to dataset
     dataset["train"] = dataset["train"].add_column("sentence2_has_negation", negations_train)
     dataset["validation_matched"] = dataset["validation_matched"].add_column("sentence2_has_negation", negations_val)
     dataset["validation_mismatched"] = dataset["validation_mismatched"].add_column("sentence2_has_negation", negations_test)
+
+    # filter dataset
+    if dataset_length is not None:
+        dataset['train'] = dataset['train'].select(random.sample(range(len(dataset['train'])), dataset_length))
+        dataset['validation_matched'] = dataset['validation_matched'].select(random.sample(range(len(dataset['validation_matched'])), dataset_length))
+        dataset['validation_mismatched'] = dataset['validation_mismatched'].select(random.sample(range(len(dataset['validation_mismatched'])), dataset_length))
     
-    # remove neutral instances 
-    dataset = dataset.filter(lambda ex: ex['label'] != 1)
-    # set contradiction label to 1
-    dataset = dataset.map(lambda x: {'label': 1 if x['label'] == 2 else x['label']})
+    source = MultiNLIDataset(dataset['train'], tokenizer, max_length, combine_neut_entail=combine_neut_entail)
+    target = MultiNLIDataset(dataset['validation_matched'], tokenizer, max_length, combine_neut_entail=combine_neut_entail)
+    test = MultiNLIDataset(dataset['validation_mismatched'], tokenizer, max_length, combine_neut_entail=combine_neut_entail)
 
-    ### Source Distribution ###
-    # filter source distribution (complete correlation)
-    if source_cc:
-        dataset['train'] = dataset['train'].filter(lambda ex: not (ex['label'] == 0 and ex["sentence2_has_negation"]))
-        dataset['train'] = dataset['train'].filter(lambda ex: not (ex['label'] == 1 and not ex["sentence2_has_negation"]))
+    classes_per_feature = [3,2] 
+    cc_groups = [(0, 0), (1, 0), (2, 1)]
+    if contra_no_neg:
+        cc_groups.append((2, 0))
+    if combine_neut_entail:
+        classes_per_feature = [2, 2]
+        cc_groups = [(0, 0), (1, 1)]
+        if contra_no_neg:
+            cc_groups.append((1, 0))
+    
+    if source_cc: 
+        cc_idxs = get_group_idxs(source.feature_labels, [np.array(cc_group) for cc_group in cc_groups])
+        source = get_split(source, cc_idxs)
+    
+    # update target idxs based on mix rate (preserves group balance)
+    if mix_rate is not None:
+        target_idxs = update_idxs_from_mix_rate(
+            target.feature_labels, mix_rate, 
+            cc_groups=cc_groups, classes_per_feature=classes_per_feature
+        )
+        target = get_split(target, target_idxs)
 
-    # balance source dataset
-    entailment_label_idxs = torch.where(torch.tensor(dataset['train']['label']) == 0)[0]
-    contradiction_label_idxs = torch.where(torch.tensor(dataset['train']['label']) == 1)[0]
-
-    num_entailments = entailment_label_idxs.shape[0]
-    num_contradictions = contradiction_label_idxs.shape[0]
-    group_size = min(num_entailments, num_contradictions)
-    source_idxs = torch.cat((entailment_label_idxs[:group_size], contradiction_label_idxs[:group_size]))
-    dataset['train'] = dataset['train'].select(source_idxs.tolist())
-
-    # split into train/val/ 
-    source_train, source_val = torch.utils.data.random_split(
-        dataset['train'], 
-        [round(len(dataset['train']) * (1 - val_split)), round(len(dataset['train']) * val_split)], 
-        generator=torch.Generator().manual_seed(42)
-    )
-
-    ### Target Distribution ###
-    is_ood = lambda ex: (ex['label'] == 0 and ex["sentence2_has_negation"]) or (ex['label'] == 1 and not ex["sentence2_has_negation"])
-
-    target_labels = torch.tensor(dataset['validation_matched']['label'])
-    target_negations = torch.tensor(dataset['validation_matched']["sentence2_has_negation"])
-
-    target_id_idxs = torch.where((target_labels == 0) & (target_negations == 0) | (target_labels == 1) & (target_negations == 1))[0]
-    target_ood_idxs = torch.where((target_labels == 0) & (target_negations == 1) | (target_labels == 1) & (target_negations == 0))[0]
-
-    num_id = len(target_id_idxs)
-    num_ood = len(target_ood_idxs)
-
-    cur_mix_rate = num_ood / len(dataset['validation_matched'])
-
-    if mix_rate is None: # keep fixed mix rate
-        pass
-    elif cur_mix_rate < mix_rate: # remove iid 
-        num_id_target = int((num_ood / mix_rate) - num_ood)
-        target_id_idxs = target_id_idxs[:num_id_target]
-    else: # remove ood 
-        num_ood_target = int(num_id * mix_rate / (1 - mix_rate))
-        target_ood_idxs = target_ood_idxs[:num_ood_target]
-
-    dataset['validation_matched'] = dataset['validation_matched'].select(torch.cat((target_id_idxs, target_ood_idxs)).tolist())
-    target_train, target_val = torch.utils.data.random_split(
-        dataset['validation_matched'], 
-        [round(len(dataset['validation_matched']) * (1 - val_split)), round(len(dataset['validation_matched']) * val_split)], 
-        generator=torch.Generator().manual_seed(42)
-    )
-
-    ### Test ###
-    test = dataset['validation_mismatched']
-
-    # convert to pytorch datasets
-    source_train = MultiNLIDataset(source_train, tokenizer, max_length)
-    source_val = MultiNLIDataset(source_val, tokenizer, max_length)
-    target_train = MultiNLIDataset(target_train, tokenizer, max_length)
-    target_val = MultiNLIDataset(target_val, tokenizer, max_length)
-    test = MultiNLIDataset(test, tokenizer, max_length)
+    # split datasets
+    if val_split > 0:
+        source_train_size = int(len(source) * (1 - val_split))
+        source_train, source_val = random_split(
+            source, 
+            [source_train_size, len(source) - source_train_size],
+            generator=torch.Generator().manual_seed(42)
+        )
+    else:
+        source_train = source 
+        source_val = []
+    if target_val_split > 0:
+        target_train_size = int(len(target) * (1 - target_val_split))
+        target_train, target_val = random_split(
+            target, 
+            [target_train_size, len(target) - target_train_size], 
+            generator=torch.Generator().manual_seed(42)
+        )
+    else:
+        target_train = target 
+        target_val = []
 
     return source_train, source_val, target_train, target_val, test
 

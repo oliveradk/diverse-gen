@@ -41,6 +41,7 @@ from collections import defaultdict
 from functools import partial
 from datetime import datetime
 from dataclasses import dataclass 
+from itertools import product
 
 from omegaconf import OmegaConf
 import numpy as np
@@ -89,11 +90,14 @@ from utils.act_utils import get_acts_and_labels, plot_activations, transform_act
 # In[ ]:
 
 
+from dataclasses import field
+
 @dataclass
 class Config():
     seed: int = 1
     dataset: str = "waterbirds"
-    loss_type: LossType = LossType.TOPK
+    loss_type: LossType = LossType.DIVDIS
+    # training 
     batch_size: int = 32
     target_batch_size: int = 64
     epochs: int = 5
@@ -104,77 +108,70 @@ class Config():
     source_weight: float = 1.0
     aux_weight: float = 1.0
     use_group_labels: bool = False
+    freeze_heads: bool = False
+    head_1_epochs: int = 5
+    # dataset
     source_cc: bool = True
     source_val_split: float = 0.2
     target_val_split: float = 0.2
-    source_mix_rate: Optional[float] = 0.0
-    source_01_mix_rate: Optional[float] = None
-    source_10_mix_rate: Optional[float] = None
     mix_rate: Optional[float] = None
-    target_01_mix_rate: Optional[float] = None
-    target_10_mix_rate: Optional[float] = None
+    shuffle_target: bool = True
+    dataset_length: Optional[int] = None
+    max_length: int = 128  # for text datasets
+    combine_neut_entail: bool = False # for multi_nli
+    contra_no_neg: bool = True # for multi_nli
+    # topk # TODO: generalize properly configure group mix rates for MLI
     aggregate_mix_rate: bool = False
     mix_rate_lower_bound: Optional[float] = 0.1
-    target_01_mix_rate_lower_bound: Optional[float] = None
-    target_10_mix_rate_lower_bound: Optional[float] = None
-    pseudo_label_all_groups: bool = False
-    shuffle_target: bool = True
-    inbalance_ratio: Optional[bool] = False
+    group_mix_rate_lower_bounds: Optional[dict[str, float]] = None # field(default_factory=lambda: {"0_1": 0.1, "1_0": 0.1})
+    disagree_only: bool = False
+    # optimizer 
     lr: float = 1e-4
     weight_decay: float = 1e-3 # 1e-4
     optimizer: str = "adamw"
     lr_scheduler: Optional[str] = None 
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
-    max_length: int = 128
+    # misc
     num_workers: int = 4
-    freeze_heads: bool = False
-    head_1_epochs: int = 5
-    dataset_length: Optional[int] = None
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     plot_activations: bool = False
 
-def post_init(conf: Config, overrides: list[str]=[]):
-    if conf.target_01_mix_rate is not None and conf.target_10_mix_rate is None:
-        conf.target_10_mix_rate = 0.0
-        if conf.mix_rate is None:
-            conf.mix_rate = conf.target_01_mix_rate
-        assert conf.mix_rate == conf.target_01_mix_rate
-    elif conf.target_01_mix_rate is None and conf.target_10_mix_rate is not None:
-        conf.target_01_mix_rate = 0.0
-        if conf.mix_rate is None:
-            conf.mix_rate = conf.target_10_mix_rate
-        assert conf.mix_rate == conf.target_10_mix_rate
-    elif conf.target_01_mix_rate is not None and conf.target_10_mix_rate is not None:
-        if conf.mix_rate is None:
-            conf.mix_rate = conf.target_01_mix_rate + conf.target_10_mix_rate
-        assert conf.mix_rate == conf.target_01_mix_rate + conf.target_10_mix_rate
-    else: # both are none 
-        if conf.mix_rate is not None:
-            conf.target_01_mix_rate = conf.mix_rate / 2
-            conf.target_10_mix_rate = conf.mix_rate / 2
+def str_to_tuple(s: str) -> tuple[int, ...]:
+    return tuple(int(i) for i in s.split("_"))
 
+def post_init(conf: Config, overrides: list[str]=[]):
     if conf.freeze_heads and "head_1_epochs" not in overrides:
         conf.head_1_epochs = round(conf.epochs / 2)
     
-    if conf.source_mix_rate is not None:
-        conf.source_01_mix_rate = conf.source_mix_rate / 2
-        conf.source_10_mix_rate = conf.source_mix_rate / 2
-    
+    if conf.group_mix_rate_lower_bounds is not None:
+        conf.group_mix_rate_lower_bounds = {str_to_tuple(k): v for k, v in conf.group_mix_rate_lower_bounds.items()}
 
     if conf.mix_rate_lower_bound is None:
         conf.mix_rate_lower_bound = conf.mix_rate
-
-    if conf.target_01_mix_rate_lower_bound is None and conf.target_10_mix_rate_lower_bound is None and conf.mix_rate_lower_bound is not None:
-        conf.target_01_mix_rate_lower_bound = conf.mix_rate_lower_bound / 2
-        conf.target_10_mix_rate_lower_bound = conf.mix_rate_lower_bound / 2
 
 
 # In[ ]:
 
 
 conf = Config()
+
+
+# In[ ]:
+
+
+# conf.dataset = "multi_nli"
+# conf.lr = 1e-5 
+# conf.lr_scheduler = "cosine"
+# conf.model = "bert"
+# conf.combine_neut_entail = False # True (done)
+# conf.contra_no_neg = True # False
+# conf.use_group_labels = False # True
+# conf.source_cc = True # False
+# conf.mix_rate = None # 0.5, 1.0, 0.1 
+# conf.mix_rate_lower_bound = 0.1
+# conf.dataset_length = 1024
 
 
 # In[ ]:
@@ -269,6 +266,16 @@ post_init(conf, overrride_keys)
 # In[ ]:
 
 
+if conf.binary:
+    raise ValueError("Binary not currently supported")
+
+if conf.heads != 2:
+    raise ValueError("Only 2 heads currently supported")
+
+
+# In[ ]:
+
+
 # create directory from config
 from dataclasses import asdict
 exp_dir = conf.exp_dir
@@ -350,34 +357,28 @@ else:
 
 collate_fn = None
 # TODO: there should be varaible n_classes for each feature 
-classes = 2
-n_features = 2 
+classes_per_head = [2, 2]
+classes_per_feat = [2, 2]
 is_img = True
 alt_index = 1
 
 if conf.dataset == "toy_grid":
     source_train, source_val, target_train, target_val, target_test = get_toy_grid_datasets(
-        source_mix_rate_0_1=conf.source_01_mix_rate, 
-        source_mix_rate_1_0=conf.source_10_mix_rate, 
-        target_mix_rate_0_1=conf.target_01_mix_rate, 
-        target_mix_rate_1_0=conf.target_10_mix_rate, 
+        target_mix_rate_0_1=conf.mix_rate / 2, 
+        target_mix_rate_1_0=conf.mix_rate / 2, 
     )
 elif conf.dataset == "cifar_mnist":
     source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
-        source_mix_rate_0_1=conf.source_01_mix_rate, 
-        source_mix_rate_1_0=conf.source_10_mix_rate, 
-        target_mix_rate_0_1=conf.target_01_mix_rate, 
-        target_mix_rate_1_0=conf.target_10_mix_rate, 
+        target_mix_rate_0_1=conf.mix_rate / 2, 
+        target_mix_rate_1_0=conf.mix_rate / 2, 
         transform=model_transform, 
         pad_sides=pad_sides
     )
 
 elif conf.dataset == "fmnist_mnist":
     source_train, source_val, target_train, target_val, target_test = get_fmnist_mnist_datasets(
-        source_mix_rate_0_1=conf.source_01_mix_rate, 
-        source_mix_rate_1_0=conf.source_10_mix_rate, 
-        target_mix_rate_0_1=conf.target_01_mix_rate, 
-        target_mix_rate_1_0=conf.target_10_mix_rate, 
+        target_mix_rate_0_1=conf.mix_rate / 2, 
+        target_mix_rate_1_0=conf.mix_rate / 2, 
         transform=model_transform, 
         pad_sides=pad_sides
     )
@@ -391,10 +392,10 @@ elif conf.dataset == "waterbirds":
         target_val_split=conf.target_val_split, 
         dataset_length=conf.dataset_length
     )
-elif conf.dataset == "cub":
-    source_train, target_train, target_test = get_cub_datasets()
-    source_val = []
-    target_val = []
+# elif conf.dataset == "cub":
+#     source_train, target_train, target_test = get_cub_datasets()
+#     source_val = []
+#     target_val = []
 elif conf.dataset.startswith("celebA"):
     if conf.dataset == "celebA-0":
         gt_feat = "Blond_Hair"
@@ -423,27 +424,38 @@ elif conf.dataset == "camelyon":
     source_train, source_val, target_train, target_val, target_test = get_camelyon_datasets(
         transform=model_transform
     )
-elif conf.dataset == "civil_comments":
-    source_train, source_val, target_train, target_val, target_test = get_civil_comments_datasets(
-        tokenizer=tokenizer,
-        max_length=conf.max_length, 
-        dataset_length=conf.dataset_length
-    )
-    is_img = False
+# elif conf.dataset == "civil_comments":
+#     source_train, source_val, target_train, target_val, target_test = get_civil_comments_datasets(
+#         tokenizer=tokenizer,
+#         max_length=conf.max_length, 
+#         dataset_length=conf.dataset_length
+#     )
+#     is_img = False
 
 elif conf.dataset == "multi_nli":
     source_train, source_val, target_train, target_val, target_test = get_multi_nli_datasets(
         mix_rate=conf.mix_rate,
         source_cc=conf.source_cc,
+        val_split=conf.source_val_split,
+        target_val_split=conf.target_val_split,
         tokenizer=tokenizer,
         max_length=conf.max_length, 
-        dataset_length=conf.dataset_length
+        dataset_length=conf.dataset_length, 
+        combine_neut_entail=conf.combine_neut_entail, 
+        contra_no_neg=conf.contra_no_neg
     )
     is_img = False
+    if not conf.combine_neut_entail:
+        classes_per_feat = [3, 2]
+        if conf.use_group_labels:
+            classes_per_head = [3, 2] # [contradiction, entailment, neutral] x [no negation, negation]
+        else:
+            classes_per_head = [3, 3] # [contradiction, entailment, neutral] x 2
 
 else:
     raise ValueError(f"Dataset {conf.dataset} not supported")
 
+assert len(classes_per_head) == conf.heads
 # if classes == 2 and conf.binary:
 #     classes = 1
 
@@ -541,10 +553,9 @@ target_test_loader = DataLoader(
 # classifiers
 from transformers import get_cosine_schedule_with_warmup
 if conf.shared_backbone:
-    net = MultiHeadBackbone(model_builder(), conf.heads, feature_dim, classes if not conf.binary else 1)
+    net = MultiHeadBackbone(model_builder(), classes_per_head, feature_dim)
 else:
-    print("warning, not using shared backbone untested")
-    net = MultiNetModel(model_builder=model_builder, n_heads=conf.heads, feature_dim=feature_dim, classes=classes)
+    net = MultiNetModel(model_builder=model_builder, classes_per_head=classes_per_head, feature_dim=feature_dim)
 net = net.to(conf.device)
 
 # optimizer
@@ -584,18 +595,24 @@ elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
     if conf.aggregate_mix_rate:
         mix_rate = conf.mix_rate_lower_bound 
         group_mix_rates = None
+    elif conf.group_mix_rate_lower_bounds is not None:
+        mix_rate = None 
+        group_mix_rates = conf.group_mix_rate_lower_bounds
     else:
         mix_rate = None 
-        group_mix_rates = {(0, 1): conf.target_01_mix_rate_lower_bound, (1, 0): conf.target_10_mix_rate_lower_bound}
+        if conf.dataset == "multi_nli" and conf.use_group_labels:
+            ood_groups = [(0, 1), (1, 0), (2, 0)]
+        else: 
+            ood_groups = [gl for gl in product(*[range(c) for c in classes_per_head])
+                          if any(gl[0] != gl[i] for i in range(1, len(gl)))]
+        group_mix_rates = {group: conf.mix_rate_lower_bound / len(ood_groups) for group in ood_groups}
+
     loss_fn = ACELoss(
-        heads=conf.heads, 
-        classes=classes,
-        binary=conf.binary,
+        classes_per_head=classes_per_head,
         mode=conf.loss_type.value, 
-        inbalance_ratio=conf.inbalance_ratio,
         mix_rate=mix_rate,
         group_mix_rates=group_mix_rates,
-        pseudo_label_all_groups=conf.pseudo_label_all_groups,
+        disagree_only=conf.disagree_only,
         device=conf.device
     )
 else:
@@ -687,24 +704,23 @@ if not is_notebook() and conf.plot_activations:
 
 
 def compute_src_losses(logits, y, gl):
-    logits_chunked = torch.chunk(logits, conf.heads, dim=-1)
-    labels = torch.cat([y, y], dim=-1) if not conf.use_group_labels else gl
-    labels_chunked = torch.chunk(labels, conf.heads, dim=-1)
+    logits_by_head = torch.split(logits, classes_per_head, dim=-1)
+    labels_by_head = [y, y] if not conf.use_group_labels else [gl[:, 0], gl[:, 1]]
 
-    if conf.binary:
-        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.squeeze().to(torch.float32)) for logit, y in zip(logits_chunked, labels_chunked)]
+    if conf.binary: # NOTE: not currently supported
+        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.squeeze().to(torch.float32)) for logit, y in zip(logits_by_head, labels_by_head)]
     else:
-        assert logits_chunked[0].shape == (logits.size(0), classes), logits_chunked[0].shape
+        assert logits_by_head[0].shape == (logits.size(0), classes_per_head[0]), logits_by_head[0].shape
         losses = [F.cross_entropy(logit.squeeze(), y.squeeze().to(torch.long)) 
-                  for logit, y in zip(logits_chunked, labels_chunked)]
+                  for logit, y in zip(logits_by_head, labels_by_head)]
     return losses
 
-def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: bool):
-    if binary:
-        return ((logits[:, head] > 0) == y.flatten()).sum().item()
+# TODO: fix
+def compute_corrects(logits: torch.Tensor, y: torch.Tensor, binary: bool):
+    if binary: # NOTE: not currently supported
+        return ((logits > 0) == y.flatten()).sum().item()
     else:
-        logits = logits.view(logits.size(0), conf.heads, classes)
-        return (logits[:, head].argmax(dim=-1) == y).sum().item()
+        return (logits.argmax(dim=-1) == y).sum().item()
         
 
 
@@ -737,8 +753,10 @@ class Logger():
 from itertools import product
 
 def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluating"): 
-    group_label_ls = list(product(range(classes), repeat=n_features))
-
+    group_label_ls = list(product(*[range(c) for c in classes_per_feat])) 
+    # e.g. for classes per_head = [3,2]
+    # group_label_ls = [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]
+    
     # loss 
     losses = []
 
@@ -787,19 +805,24 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
                 num_examples_group = group_logits.size(0)
                 total_samples_by_groups[group_label] += num_examples_group
                 group_labels = torch.tensor(group_label).repeat(num_examples_group, 1).to(device)
-                # print("group label shapes", group_labels[:, 0].shape)
+                group_logits_by_head = torch.split(group_logits, classes_per_head, dim=-1)
                 for i in range(conf.heads):
-                    total_corrects_by_groups[group_label][i] += compute_corrects(group_logits, i, group_labels[:, 0], conf.binary)
-                    total_corrects_alt_by_groups[group_label][i] += compute_corrects(group_logits, i, group_labels[:, 1], conf.binary)
+                    if conf.use_group_labels:
+                        total_corrects_by_groups[group_label][i] += compute_corrects(group_logits_by_head[i], group_labels[:, i], conf.binary)
+                    else:
+                        total_corrects_by_groups[group_label][i] += compute_corrects(group_logits_by_head[i], group_labels[:, 0], conf.binary)
+                        total_corrects_alt_by_groups[group_label][i] += compute_corrects(group_logits_by_head[i], group_labels[:, 1], conf.binary)
     
     total_corrects = torch.stack([gl_corrects for gl_corrects in total_corrects_by_groups.values()], dim=0).sum(dim=0)
-    total_corrects_alt = torch.stack([gl_corrects for gl_corrects in total_corrects_alt_by_groups.values()], dim=0).sum(dim=0)
+    if not conf.use_group_labels:
+        total_corrects_alt = torch.stack([gl_corrects for gl_corrects in total_corrects_alt_by_groups.values()], dim=0).sum(dim=0)
 
     # average metrics
     metrics = {}
     for i in range(conf.heads):
         metrics[f"acc_{i}"] = (total_corrects[i] / total_samples).item()
-        metrics[f"acc_alt_{i}"] = (total_corrects_alt[i] / total_samples).item()
+        if not conf.use_group_labels:
+            metrics[f"acc_alt_{i}"] = (total_corrects_alt[i] / total_samples).item()
     
     if loss_fn is not None:
         metrics["loss"] = torch.mean(torch.tensor(losses)).item()
@@ -807,7 +830,8 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
     for group_label in group_label_ls:
         for i in range(conf.heads): 
             metrics[f"acc_{i}_{group_label}"] = (total_corrects_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
-            metrics[f"acc_alt_{i}_{group_label}"] = (total_corrects_alt_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
+            if not conf.use_group_labels:
+                metrics[f"acc_alt_{i}_{group_label}"] = (total_corrects_alt_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
     # worst group acc per head
     for i in range(conf.heads):
         metrics[f"worst_acc_{i}"] = min([metrics[f"acc_{i}_{group_label}"] for group_label in group_label_ls])
@@ -912,25 +936,23 @@ try:
             if len(target_val) > 0:
                 print(f"Target validation loss {logger.metrics['val_target_loss'][-1]:.4f}")
             print(f"Validation loss: {logger.metrics['val_loss'][-1]:.4f}")
-            # if len(target_val) > 0:
-            #     for group_label in product(range(2), repeat=gl.shape[1]):
-            #         print(f"Group {group_label} validation count: {target_val_metrics[f'count_{group_label}']}")
-            # print test accuracies (total and group)
             print("\n=== Test Accuracies ===")
             # Overall accuracy for each head
             print("\nOverall Accuracies:")
             for i in range(conf.heads):
-                print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}'][-1]:.4f}  |  Alt: {logger.metrics[f'test_acc_alt_{i}'][-1]:.4f}")
+                print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}'][-1]:.4f}" + \
+                      (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}'][-1]:.4f}" if not conf.use_group_labels else ""))
             # Worst group accuracy for each head
             print("\nWorst Group Accuracies:")
             for i in range(conf.heads):
                 print(f"Head {i}:  Worst: {logger.metrics[f'test_worst_acc_{i}'][-1]:.4f}")
             # Group-wise accuracies
             print("\nGroup-wise Accuracies:")
-            for group_label in product(range(2), repeat=gl.shape[1]):
+            for group_label in product(*[range(c) for c in classes_per_feat]):
                 print(f"\nGroup {group_label}, count: {target_test_metrics[f'count_{group_label}']}:")
                 for i in range(conf.heads):
-                    print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}  |  Alt: {logger.metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}")
+                    print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}" + \
+                          (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}" if not conf.use_group_labels else ""))
 
             # plot activations 
             if conf.plot_activations:   
