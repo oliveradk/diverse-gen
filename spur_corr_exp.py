@@ -161,14 +161,6 @@ conf = Config()
 # In[ ]:
 
 
-conf.dataset = "toy_grid"
-conf.model = "toy_model"
-conf.loss_type = LossType.TOPK
-
-
-# In[ ]:
-
-
 # conf.dataset = "multi_nli"
 # conf.lr = 1e-5 
 # conf.lr_scheduler = "cosine"
