@@ -161,6 +161,14 @@ conf = Config()
 # In[ ]:
 
 
+conf.dataset = "toy_grid"
+conf.model = "toy_model"
+conf.loss_type = LossType.TOPK
+
+
+# In[ ]:
+
+
 # conf.dataset = "multi_nli"
 # conf.lr = 1e-5 
 # conf.lr_scheduler = "cosine"
@@ -364,21 +372,21 @@ alt_index = 1
 
 if conf.dataset == "toy_grid":
     source_train, source_val, target_train, target_val, target_test = get_toy_grid_datasets(
-        target_mix_rate_0_1=conf.mix_rate / 2, 
-        target_mix_rate_1_0=conf.mix_rate / 2, 
+        target_mix_rate_0_1=conf.mix_rate / 2 if conf.mix_rate is not None else None, 
+        target_mix_rate_1_0=conf.mix_rate / 2 if conf.mix_rate is not None else None, 
     )
 elif conf.dataset == "cifar_mnist":
     source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
-        target_mix_rate_0_1=conf.mix_rate / 2, 
-        target_mix_rate_1_0=conf.mix_rate / 2, 
+        target_mix_rate_0_1=conf.mix_rate / 2 if conf.mix_rate is not None else None, 
+        target_mix_rate_1_0=conf.mix_rate / 2 if conf.mix_rate is not None else None, 
         transform=model_transform, 
         pad_sides=pad_sides
     )
 
 elif conf.dataset == "fmnist_mnist":
     source_train, source_val, target_train, target_val, target_test = get_fmnist_mnist_datasets(
-        target_mix_rate_0_1=conf.mix_rate / 2, 
-        target_mix_rate_1_0=conf.mix_rate / 2, 
+        target_mix_rate_0_1=conf.mix_rate / 2 if conf.mix_rate is not None else None, 
+        target_mix_rate_1_0=conf.mix_rate / 2 if conf.mix_rate is not None else None, 
         transform=model_transform, 
         pad_sides=pad_sides
     )

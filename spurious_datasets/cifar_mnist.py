@@ -23,9 +23,9 @@ def get_cifar_mnist_datasets(
     if source_mix_rate_1_0 is None:
         source_mix_rate_1_0 = 0.0
     if target_mix_rate_0_1 is None:
-        target_mix_rate_0_1 = 0.5
+        target_mix_rate_0_1 = 0.25
     if target_mix_rate_1_0 is None:
-        target_mix_rate_1_0 = 0.5
+        target_mix_rate_1_0 = 0.25
 
     # get full datasets 
     mnist_train = torchvision.datasets.MNIST('./data/mnist/', train=True, download=True, transform=mnist_transform)
