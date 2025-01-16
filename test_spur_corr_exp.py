@@ -32,21 +32,26 @@ TEST_CONFIG = {
     "dataset_length": 8
 }
 
-# @pytest.mark.parametrize("loss_type", LOSS_TYPES)
-# def test_waterbirds_all_losses(loss_type):
-#     """Test all loss types on waterbirds dataset"""
-#     cmd = [
-#         "python", "spur_corr_exp.py",
-#         "dataset=waterbirds",
-#         f"loss_type={loss_type.name}",
-#     ]
-#     # Add configuration parameters
-#     cmd.extend([f"{k}={v}" for k, v in TEST_CONFIG.items()])
-#     try: 
-#         subprocess.run(cmd, check=True)
-#     except Exception as e:
-#         print(f"Error running command: {e}")
-#         raise e
+@pytest.mark.parametrize("loss_type", LOSS_TYPES)
+def test_waterbirds_all_losses(loss_type):
+    """Test all loss types on waterbirds dataset"""
+    cmd = [
+        "python", "spur_corr_exp.py",
+        "dataset=waterbirds",
+        f"loss_type={loss_type.name}",
+    ]
+    if loss_type == LossType.DBAT:
+        cmd.extend([
+            "freeze_heads=True", 
+            "shared_backbone=False",
+        ])
+    # Add configuration parameters
+    cmd.extend([f"{k}={v}" for k, v in TEST_CONFIG.items()])
+    try: 
+        subprocess.run(cmd, check=True)
+    except Exception as e:
+        print(f"Error running command: {e}")
+        raise e
 
 @pytest.mark.parametrize("dataset", DATASETS)
 def test_topk_all_datasets(dataset):
