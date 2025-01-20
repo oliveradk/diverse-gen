@@ -631,16 +631,18 @@ if conf.plot_activations:
     model = model.to(conf.device)
     activations, labels = get_acts_and_labels(model, target_test_loader, conf.device)
     labels = labels.to('cpu')
-    pca_fig = plot_activations(
+    pca_fig, pca_reducer = plot_activations(
         activations=activations, labels=labels, 
         classes_per_feature=classes_per_feat, transform="pca"
     )
-    umap_fig = plot_activations(
+    umap_fig, umap_reducer = plot_activations(
         activations=activations, labels=labels, 
         classes_per_feature=classes_per_feat, transform="umap"
     )
     pca_fig.savefig(f"{exp_dir}/activations_pretrain_pca.png")
+    pca_fig.savefig(f"{exp_dir}/activations_pretrain_pca.svg")
     umap_fig.savefig(f"{exp_dir}/activations_pretrain_umap.png")
+    umap_fig.savefig(f"{exp_dir}/activations_pretrain_umap.svg")
     
 
 
@@ -649,9 +651,9 @@ if conf.plot_activations:
 
 # fit linear probe 
 if conf.plot_activations:
-    acc, alt_acc = compute_probe_acc(activations, labels, classes_per_feat)
-    print(f"Accuracy: {acc:.4f}")
-    print(f"Alt Accuracy: {alt_acc:.4f}")
+    probe_acc, probe_acc_alt = compute_probe_acc(activations, labels, classes_per_feat)
+    print(f"Accuracy: {probe_acc:.4f}")
+    print(f"Alt Accuracy: {probe_acc_alt:.4f}")
     # nah I'll just try to picke the umap
 
 
@@ -780,8 +782,8 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
 
 logger = Logger(exp_dir)
 if conf.plot_activations:   
-    logger.add_scalar("test", "probe_acc", acc, -1)
-    logger.add_scalar("test", "probe_acc_alt", alt_acc, -1)
+    logger.add_scalar("test", "probe_acc", probe_acc, -1)
+    logger.add_scalar("test", "probe_acc_alt", probe_acc_alt, -1)
 
 
 # In[ ]:
@@ -910,16 +912,18 @@ try:
                     # get activations 
                     activations, labels = get_acts_and_labels(net.backbone, target_test_loader, conf.device)
                     labels = labels.to('cpu')
-                    pca_fig = plot_activations(
+                    pca_fig, pca_reducer = plot_activations(
                         activations=activations, labels=labels, 
                         classes_per_feature=classes_per_feat, transform="pca"
                     )
-                    umap_fig = plot_activations(
+                    umap_fig, umap_reducer = plot_activations(
                         activations=activations, labels=labels, 
                         classes_per_feature=classes_per_feat, transform="umap"
                     )
                     pca_fig.savefig(f"{exp_dir}/activations_{epoch}_pca.png")
+                    pca_fig.savefig(f"{exp_dir}/activations_{epoch}_pca.svg")
                     umap_fig.savefig(f"{exp_dir}/activations_{epoch}_umap.png")
+                    umap_fig.savefig(f"{exp_dir}/activations_{epoch}_umap.svg")
                     plt.close(pca_fig)
                     plt.close(umap_fig)
             

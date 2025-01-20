@@ -50,9 +50,9 @@ def plot_activations(
     if activations is None:
         activations, labels = get_acts_and_labels(model, loader, device)
     if transform == "pca":
-        transformed_acts, _ = pca_transform(activations)
+        transformed_acts, reducer = pca_transform(activations)
     elif transform == "umap":
-        transformed_acts, _ = umap_transform(activations)
+        transformed_acts, reducer = umap_transform(activations)
     else:
         raise ValueError(f"Invalid transform: {transform}")
 
@@ -79,7 +79,7 @@ def plot_activations(
 
 
     fig.tight_layout()
-    return fig
+    return fig, reducer
 
 def compute_probe_acc(activations, labels, classes_per_feat):
     from sklearn.linear_model import LogisticRegression
