@@ -626,7 +626,7 @@ else:
 
 
 # visualize data using first two principle componets of final layer activations
-if is_notebook() and conf.plot_activations:
+if conf.plot_activations:
     model = model_builder()
     model = model.to(conf.device)
     activations, labels = get_acts_and_labels(model, target_test_loader, conf.device)
@@ -648,7 +648,7 @@ if is_notebook() and conf.plot_activations:
 
 
 # fit linear probe 
-if is_notebook() and conf.plot_activations:
+if conf.plot_activations:
     acc, alt_acc = compute_probe_acc(activations, labels, classes_per_feat)
     print(f"Accuracy: {acc:.4f}")
     print(f"Alt Accuracy: {alt_acc:.4f}")
