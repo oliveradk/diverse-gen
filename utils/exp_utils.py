@@ -17,7 +17,7 @@ def get_executor(
     timeout_min: int = 60 * 48,
     cpus_per_task: int = 4,
     nodes: int = 1,
-    slurm_qos: str = "high",
+    slurm_qos: str = "default",
     slurm_array_parallelism: int = 8,
     slurm_exclude: str = "ddpg.ist.berkeley.edu,dqn.ist.berkeley.edu" # large sharded gpu's - often causes OOM issues
 ):
