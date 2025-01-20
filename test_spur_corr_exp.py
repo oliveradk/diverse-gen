@@ -14,7 +14,7 @@ DATASETS = [
     # ("celebA-1", "Resnet50"),
     # ("celebA-2", "Resnet50"),
     # ("camelyon", "Resnet50"),
-    ("multi_nli", "bert"),
+    ("multi-nli", "bert"),
 ]
 
 LOSS_TYPES = [
