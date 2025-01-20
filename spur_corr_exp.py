@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "2" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -118,8 +118,8 @@ class Config():
     shuffle_target: bool = True
     dataset_length: Optional[int] = None
     max_length: int = 128  # for text datasets
-    combine_neut_entail: bool = False # for multi_nli
-    contra_no_neg: bool = True # for multi_nli
+    combine_neut_entail: bool = False # for multi-nli
+    contra_no_neg: bool = True # for multi-nli
     # topk # TODO: generalize properly configure group mix rates for MLI
     aggregate_mix_rate: bool = False
     mix_rate_lower_bound: Optional[float] = 0.1
@@ -161,7 +161,7 @@ conf = Config()
 # In[ ]:
 
 
-# conf.dataset = "multi_nli"
+# conf.dataset = "multi-nli"
 # conf.lr = 1e-5 
 # conf.lr_scheduler = "cosine"
 # conf.model = "bert"
@@ -242,7 +242,7 @@ conf = Config()
 # Resnet50 Configs
 # if conf.model == "Resnet50":
 #     conf.lr = 1e-4 # probably too high, should be 1e-4
-# if conf.dataset == "multi_nli" or conf.dataset == "civil_comments":
+# if conf.dataset == "multi-nli" or conf.dataset == "civil_comments":
 #     conf.model = "bert"
 #     conf.lr = 1e-5
 #     conf.lr_scheduler = "cosine"
@@ -432,7 +432,7 @@ elif conf.dataset == "camelyon":
 #     )
 #     is_img = False
 
-elif conf.dataset == "multi_nli":
+elif conf.dataset == "multi-nli":
     source_train, source_val, target_train, target_val, target_test = get_multi_nli_datasets(
         mix_rate=conf.mix_rate,
         source_cc=conf.source_cc,
@@ -600,7 +600,7 @@ elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
         group_mix_rates = conf.group_mix_rate_lower_bounds
     else:
         mix_rate = None 
-        if conf.dataset == "multi_nli" and conf.use_group_labels:
+        if conf.dataset == "multi-nli" and conf.use_group_labels:
             ood_groups = [(0, 1), (1, 0), (2, 0)]
         else: 
             ood_groups = [gl for gl in product(*[range(c) for c in classes_per_head])
