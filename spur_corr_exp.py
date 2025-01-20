@@ -626,7 +626,7 @@ else:
 
 
 # visualize data using first two principle componets of final layer activations
-if conf.plot_activations:
+if conf.plot_activations and conf.shared_backbone:
     model = model_builder()
     model = model.to(conf.device)
     activations, labels = get_acts_and_labels(model, target_test_loader, conf.device)
@@ -650,7 +650,7 @@ if conf.plot_activations:
 
 
 # fit linear probe 
-if conf.plot_activations:
+if conf.plot_activations and conf.shared_backbone:
     probe_acc, probe_acc_alt = compute_probe_acc(activations, labels, classes_per_feat)
     print(f"Accuracy: {probe_acc:.4f}")
     print(f"Alt Accuracy: {probe_acc_alt:.4f}")
@@ -781,7 +781,7 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
 
 
 logger = Logger(exp_dir)
-if conf.plot_activations:   
+if conf.plot_activations and conf.shared_backbone:   
     logger.add_scalar("test", "probe_acc", probe_acc, -1)
     logger.add_scalar("test", "probe_acc_alt", probe_acc_alt, -1)
 
@@ -870,7 +870,7 @@ try:
                     logger.add_scalar("test", k, v, epoch)
             
             # probe acc
-            if conf.plot_activations:
+            if conf.plot_activations and conf.shared_backbone:
                 activations, labels = get_acts_and_labels(net.backbone, target_test_loader, conf.device)
                 probe_acc, probe_acc_alt = compute_probe_acc(activations, labels, classes_per_feat)
                 logger.add_scalar("test", "probe_acc", probe_acc, epoch)
@@ -908,7 +908,7 @@ try:
             if logger.metrics["val_loss"][-1] == min(logger.metrics["val_loss"]):
                 torch.save(net.state_dict(), f"{exp_dir}/checkpoint_{epoch}.pth")
                 # plot activations 
-                if conf.plot_activations:   
+                if conf.plot_activations and conf.shared_backbone:   
                     # get activations 
                     activations, labels = get_acts_and_labels(net.backbone, target_test_loader, conf.device)
                     labels = labels.to('cpu')

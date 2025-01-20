@@ -83,16 +83,26 @@ def plot_activations(
 
 def compute_probe_acc(activations, labels, classes_per_feat):
     from sklearn.linear_model import LogisticRegression
+    
     lr = LogisticRegression(
         max_iter=10000, 
         multi_class='multinomial' if len(classes_per_feat) > 2 else 'ovr'
     )
-    lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
-    acc = lr.score(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+    label_classes = labels[:, 0].unique()
+    if len(label_classes) > 1:
+        lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+        acc = lr.score(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+    else: 
+        acc = 0
+    
     lr_alt = LogisticRegression(
         max_iter=10000, 
         multi_class='multinomial' if len(classes_per_feat) > 2 else 'ovr'
     )
-    lr_alt.fit(activations.to('cpu').numpy(), labels[:, 1].to('cpu').numpy())
-    alt_acc = lr_alt.score(activations.to('cpu').numpy(), labels[:, 1].to('cpu').numpy())
+    alt_label_classes = labels[:, 1].unique()
+    if len(alt_label_classes) > 1:
+        lr_alt.fit(activations.to('cpu').numpy(), labels[:, 1].to('cpu').numpy())
+        alt_acc = lr_alt.score(activations.to('cpu').numpy(), labels[:, 1].to('cpu').numpy())
+    else: 
+        alt_acc = 0
     return acc, alt_acc
