@@ -1,6 +1,9 @@
 from enum import Enum
 from typing import Union
+from itertools import product
+
 import torch
+
 
 
 Input = Union[dict[str, torch.Tensor], torch.Tensor]
@@ -28,8 +31,32 @@ def to_device(x: Input, y: torch.Tensor, gl: torch.Tensor, device: torch.device)
     y, gl = y.to(device), gl.to(device)
     return x, y, gl
 
+
 def batch_size(x: Input):
     if isinstance(x, dict):
         return next(iter(x.values())).shape[0]
     else: 
         return x.shape[0]
+
+
+def feature_label_ls(classes_per_head: list[int]):
+    return list(product(*[range(c) for c in classes_per_head]))
+
+
+def group_labels_from_labels(classes_per_feature: list[int], labels: torch.Tensor):
+    # Calculate the unique index for each combination
+    # Using the principle: each position contributes its value multiplied by 
+    # the product of the number of classes in previous positions
+    
+    multipliers = torch.ones(len(classes_per_feature), dtype=torch.int64)
+    for i in range(len(classes_per_feature)-2, -1, -1):
+        multipliers[i] = multipliers[i+1] * classes_per_feature[i+1]
+    
+    # Convert to unique indices
+    unique_labels = (labels * multipliers).sum(dim=1)
+    
+    return unique_labels
+
+
+
+    

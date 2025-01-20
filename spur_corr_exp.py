@@ -81,8 +81,9 @@ from spurious_datasets.multi_nli import get_multi_nli_datasets
 from spurious_datasets.civil_comments import get_civil_comments_datasets
 from spurious_datasets.celebA import get_celebA_datasets
 
-from utils.utils import to_device, batch_size
-from utils.act_utils import get_acts_and_labels, plot_activations, transform_activations
+from utils.utils import to_device, batch_size, feature_label_ls
+from utils.logger import Logger
+from utils.act_utils import get_acts_and_labels, plot_activations, compute_probe_acc
 
 
 # # Setup Experiment
@@ -96,7 +97,7 @@ from dataclasses import field
 class Config():
     seed: int = 1
     dataset: str = "waterbirds"
-    loss_type: LossType = LossType.DIVDIS
+    loss_type: LossType = LossType.TOPK
     # training 
     batch_size: int = 32
     target_batch_size: int = 64
@@ -136,7 +137,7 @@ class Config():
     num_workers: int = 4
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    plot_activations: bool = False
+    plot_activations: bool = True
 
 def str_to_tuple(s: str) -> tuple[int, ...]:
     return tuple(int(i) for i in s.split("_"))
@@ -603,7 +604,7 @@ elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
         if conf.dataset == "multi-nli" and conf.use_group_labels:
             ood_groups = [(0, 1), (1, 0), (2, 0)]
         else: 
-            ood_groups = [gl for gl in product(*[range(c) for c in classes_per_head])
+            ood_groups = [gl for gl in feature_label_ls(classes_per_head)
                           if any(gl[0] != gl[i] for i in range(1, len(gl)))]
         group_mix_rates = {group: conf.mix_rate_lower_bound / len(ood_groups) for group in ood_groups}
 
@@ -628,40 +629,19 @@ else:
 if is_notebook() and conf.plot_activations:
     model = model_builder()
     model = model.to(conf.device)
-    activations, labels = get_acts_and_labels(model, target_test_loader)
-    activations_pca, pca = transform_activations(activations)
-
-
-# In[ ]:
-
-
-if is_notebook() and conf.plot_activations:
-    group_labels = labels[:, 0] * 2 + labels[:, 1]
-    plt.scatter(activations_pca[:, 0], activations_pca[:, 1], c=group_labels.to('cpu'), cmap="viridis")
-    plt.title("Group labels")
-    plt.show()
-
-
-# In[ ]:
-
-
-from sklearn.linear_model import LogisticRegression
-if is_notebook() and conf.plot_activations:
-    component_range = [2**i for i in range(1, 9)]
-    component_range = [i for i in component_range if i <= feature_dim]
-    n_components_accs = []
-    for n_components in tqdm(component_range):
-        pca = PCA(n_components=n_components)
-        pca.fit(activations)
-        activations_pca = pca.transform(activations)
-        # fit probe 
-        lr = LogisticRegression(max_iter=1000)
-        lr.fit(activations_pca, labels[:, 0].to('cpu').numpy())
-        acc = lr.score(activations_pca, labels[:, 0].to('cpu').numpy())
-        n_components_accs.append(acc)
-    plt.plot(component_range, n_components_accs, label="accuracy")
-    plt.show()
-
+    activations, labels = get_acts_and_labels(model, target_test_loader, conf.device)
+    labels = labels.to('cpu')
+    pca_fig = plot_activations(
+        activations=activations, labels=labels, 
+        classes_per_feature=classes_per_feat, transform="pca"
+    )
+    umap_fig = plot_activations(
+        activations=activations, labels=labels, 
+        classes_per_feature=classes_per_feat, transform="umap"
+    )
+    pca_fig.savefig(f"{exp_dir}/activations_pretrain_pca.png")
+    umap_fig.savefig(f"{exp_dir}/activations_pretrain_umap.png")
+    
 
 
 # In[ ]:
@@ -669,33 +649,10 @@ if is_notebook() and conf.plot_activations:
 
 # fit linear probe 
 if is_notebook() and conf.plot_activations:
-    from sklearn.linear_model import LogisticRegression
-    lr = LogisticRegression(max_iter=10000)
-    lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
-    # get accuracy 
-    acc = lr.score(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+    acc, alt_acc = compute_probe_acc(activations, labels, classes_per_feat)
     print(f"Accuracy: {acc:.4f}")
-
-
-# In[ ]:
-
-
-if is_notebook() and conf.plot_activations:
-    fig = plt.figure(figsize=(12, 5))
-    # Second 3D plot for group labels
-    ax3 = fig.add_subplot(121, projection='3d')
-    scatter3 = ax3.scatter(activations_pca[:, 0], activations_pca[:, 1], activations_pca[:,2], 
-                        c=group_labels.to('cpu'), cmap="viridis")
-    ax3.view_init(25, 210, 0)
-    ax3.set_title('Group labels')
-
-
-# In[ ]:
-
-
-if not is_notebook() and conf.plot_activations:
-    fig = plot_activations(model=net.backbone, loader=target_test_loader, device=conf.device)
-    fig.savefig(f"{exp_dir}/activations_pretrain.png")
+    print(f"Alt Accuracy: {alt_acc:.4f}")
+    # nah I'll just try to picke the umap
 
 
 # # Train
@@ -727,33 +684,8 @@ def compute_corrects(logits: torch.Tensor, y: torch.Tensor, binary: bool):
 # In[ ]:
 
 
-from torch.utils.tensorboard import SummaryWriter
-class Logger():
-    def __init__(self, exp_dir):
-        self.exp_dir = exp_dir
-        self.metrics = defaultdict(list)
-        self.tb_writer = SummaryWriter(log_dir=exp_dir)
-    
-    def add_scalar(self, parition, name, value, step=None, to_metrics=True, to_tb=True):
-        if to_metrics:
-            self.metrics[f"{parition}_{name}"].append(value)
-        if to_tb:
-            self.tb_writer.add_scalar(f"{parition}/{name}", value, step)
-
-    def flush(self):
-        self.tb_writer.flush()
-        # save metrics to json
-        with open(f"{self.exp_dir}/metrics.json", "w") as f:
-            json.dump(self.metrics, f, indent=4)
-
-
-# In[ ]:
-
-
-from itertools import product
-
 def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluating"): 
-    group_label_ls = list(product(*[range(c) for c in classes_per_feat])) 
+    group_label_ls = feature_label_ls(classes_per_feat)
     # e.g. for classes per_head = [3,2]
     # group_label_ls = [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]
     
@@ -846,9 +778,17 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
 # In[ ]:
 
 
+logger = Logger(exp_dir)
+if conf.plot_activations:   
+    logger.add_scalar("test", "probe_acc", acc, -1)
+    logger.add_scalar("test", "probe_acc_alt", alt_acc, -1)
+
+
+# In[ ]:
+
+
 # TODO: change diciotary values to source loss, target loss
 from itertools import cycle
-logger = Logger(exp_dir)
 try:
     if conf.freeze_heads:
         # freeze second head (for dbat)
@@ -926,6 +866,13 @@ try:
             for k, v in target_test_metrics.items():
                 if 'count' not in k:
                     logger.add_scalar("test", k, v, epoch)
+            
+            # probe acc
+            if conf.plot_activations:
+                activations, labels = get_acts_and_labels(net.backbone, target_test_loader, conf.device)
+                probe_acc, probe_acc_alt = compute_probe_acc(activations, labels, classes_per_feat)
+                logger.add_scalar("test", "probe_acc", probe_acc, epoch)
+                logger.add_scalar("test", "probe_acc_alt", probe_acc_alt, epoch)
 
 
             ### Print Results
@@ -948,19 +895,33 @@ try:
                 print(f"Head {i}:  Worst: {logger.metrics[f'test_worst_acc_{i}'][-1]:.4f}")
             # Group-wise accuracies
             print("\nGroup-wise Accuracies:")
-            for group_label in product(*[range(c) for c in classes_per_feat]):
+            for group_label in feature_label_ls(classes_per_feat):
                 print(f"\nGroup {group_label}, count: {target_test_metrics[f'count_{group_label}']}:")
                 for i in range(conf.heads):
                     print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}" + \
                           (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}" if not conf.use_group_labels else ""))
 
-            # plot activations 
-            if conf.plot_activations:   
-                fig = plot_activations(
-                    model=net.backbone, loader=target_test_loader, device=conf.device
-                )
-                fig.savefig(f"{exp_dir}/activations_{epoch}.png")
-                plt.close()
+
+            # save checkpoint if lowest validation loss
+            if logger.metrics["val_loss"][-1] == min(logger.metrics["val_loss"]):
+                torch.save(net.state_dict(), f"{exp_dir}/checkpoint_{epoch}.pth")
+                # plot activations 
+                if conf.plot_activations:   
+                    # get activations 
+                    activations, labels = get_acts_and_labels(net.backbone, target_test_loader, conf.device)
+                    labels = labels.to('cpu')
+                    pca_fig = plot_activations(
+                        activations=activations, labels=labels, 
+                        classes_per_feature=classes_per_feat, transform="pca"
+                    )
+                    umap_fig = plot_activations(
+                        activations=activations, labels=labels, 
+                        classes_per_feature=classes_per_feat, transform="umap"
+                    )
+                    pca_fig.savefig(f"{exp_dir}/activations_{epoch}_pca.png")
+                    umap_fig.savefig(f"{exp_dir}/activations_{epoch}_umap.png")
+                    plt.close(pca_fig)
+                    plt.close(umap_fig)
             
             net.train()
 finally:

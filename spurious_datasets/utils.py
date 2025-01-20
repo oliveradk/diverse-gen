@@ -1,6 +1,7 @@
 from typing import Optional
 from itertools import product
 
+from utils.utils import feature_label_ls
 import numpy as np
 
 
@@ -72,7 +73,7 @@ def update_idxs_from_mix_rate(
     if classes_per_feature is None:
         classes_per_feature = [2] * len(feature_labels.shape)
     
-    group_label_ls = list(product(*[range(c) for c in classes_per_feature]))
+    group_label_ls = feature_label_ls(classes_per_feature)
     if cc_groups is None:
         cc_groups = [gl for gl in group_label_ls 
                            if all([gl[0] == gl[i] for i in range(len(gl))])]
