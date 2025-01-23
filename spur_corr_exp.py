@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -188,11 +188,16 @@ conf = Config()
 # In[ ]:
 
 
-# if conf.dataset == "toy_grid": 
-#     conf.lr = 1e-3
-#     conf.optimizer = "sgd"
-#     conf.model = "toy_model"
-#     conf.epochs = 128
+# conf.dataset = "toy_grid"
+# conf.lr = 1e-3
+# conf.optimizer = "adamw"
+# conf.model = "toy_model"
+# conf.batch_size = 32 
+# conf.target_batch_size = 128
+# conf.epochs = 100
+# conf.loss_type = LossType.DIVDIS
+# conf.mix_rate_lower_bound = 0.5
+# conf.plot_activations = False
 
 
 # In[ ]:
@@ -266,9 +271,6 @@ post_init(conf, overrride_keys)
 
 # In[ ]:
 
-
-if conf.binary:
-    raise ValueError("Binary not currently supported")
 
 if conf.heads != 2:
     raise ValueError("Only 2 heads currently supported")
@@ -457,8 +459,9 @@ else:
     raise ValueError(f"Dataset {conf.dataset} not supported")
 
 assert len(classes_per_head) == conf.heads
-# if classes == 2 and conf.binary:
-#     classes = 1
+if conf.binary:
+    assert all([c == 2 for c in classes_per_head])
+    classes_per_head = [1 for c in classes_per_head]
 
 
 
@@ -582,7 +585,7 @@ else:
 if conf.loss_type == LossType.DIVDIS:
     loss_fn = DivDisLoss(heads=conf.heads)
 elif conf.loss_type == LossType.DBAT:
-    loss_fn = DBatLoss(heads=conf.heads)
+    loss_fn = DBatLoss(heads=conf.heads, n_classes=classes_per_head[0])
 elif conf.loss_type == LossType.CONF:
     loss_fn = ConfLoss()
 elif conf.loss_type == LossType.SMOOTH:
@@ -669,7 +672,8 @@ def compute_src_losses(logits, y, gl):
     labels_by_head = [y, y] if not conf.use_group_labels else [gl[:, 0], gl[:, 1]]
 
     if conf.binary: # NOTE: not currently supported
-        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.squeeze().to(torch.float32)) for logit, y in zip(logits_by_head, labels_by_head)]
+        losses = [F.binary_cross_entropy_with_logits(logit.squeeze(), y.squeeze().to(torch.float32)) 
+                  for logit, y in zip(logits_by_head, labels_by_head)]
     else:
         assert logits_by_head[0].shape == (logits.size(0), classes_per_head[0]), logits_by_head[0].shape
         losses = [F.cross_entropy(logit.squeeze(), y.squeeze().to(torch.long)) 
@@ -679,7 +683,7 @@ def compute_src_losses(logits, y, gl):
 # TODO: fix
 def compute_corrects(logits: torch.Tensor, y: torch.Tensor, binary: bool):
     if binary: # NOTE: not currently supported
-        return ((logits > 0) == y.flatten()).sum().item()
+        return ((logits.squeeze() > 0) == y.flatten()).sum().item()
     else:
         return (logits.argmax(dim=-1) == y).sum().item()
         
