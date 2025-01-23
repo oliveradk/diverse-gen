@@ -45,17 +45,14 @@ def get_executor_local(out_dir: Path):
     return executor
 
 def run_experiments(executor, experiments: list, script_name: str):
-    # with executor.batch():
-    jobs = []
-    for exp in experiments:
-        executor.update_parameters(
-            output_dir=exp.exp_dir
-        )
-        exp_dict = exp.__dict__ if hasattr(exp, '__dict__') else exp
-        function = submitit.helpers.CommandFunction(
-            ["python", script_name] + conf_to_args(exp_dict)
-        )
-        jobs.append(executor.submit(function))
+    with executor.batch():
+        jobs = []
+        for exp in experiments:
+            exp_dict = exp.__dict__ if hasattr(exp, '__dict__') else exp
+            function = submitit.helpers.CommandFunction(
+                ["python", script_name] + conf_to_args(exp_dict)
+            )
+            jobs.append(executor.submit(function))
     return jobs
 
 
