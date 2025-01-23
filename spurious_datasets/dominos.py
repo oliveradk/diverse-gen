@@ -1,3 +1,5 @@
+import os
+
 import torchvision
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
@@ -15,7 +17,13 @@ mnist_transform = transforms.Compose([
     )
 ])
 
+def get_dominos_path(dataset_name, dataset_split, mix_rate_0_1, mix_rate_1_0, vertical):
+    return f"data/dominos/{dataset_name}_v{vertical}_m{mix_rate_0_1}_{mix_rate_1_0}_{dataset_split}.pt"
+
+
 def gen_dominos_dataset(
+    dataset_name, 
+    dataset_split, 
     dataset_a, 
     dataset_b, 
     mix_rate_0_1, 
@@ -24,8 +32,13 @@ def gen_dominos_dataset(
     transform=None, 
     pad_sides=False, 
     labels_a=[0, 1], 
-    labels_b=[0, 1]
+    labels_b=[0, 1], 
+    use_cache=True
 ):  
+    if use_cache:
+        dataset_path = get_dominos_path(dataset_name, dataset_split, mix_rate_0_1, mix_rate_1_0, vertical)
+        if os.path.exists(dataset_path):
+            return torch.load(dataset_path)
     # filter by labels
     dataset_a_0 = [(img, label) for img, label in dataset_a if label == labels_a[0]]
     dataset_a_1 = [(img, label) for img, label in dataset_a if label == labels_a[1]]
@@ -72,4 +85,8 @@ def gen_dominos_dataset(
     labels = labels[shuffle]
     group_labels = group_labels[shuffle]
     dataset = TensorDataset(images, labels, group_labels)
+    if use_cache:
+        if not os.path.exists("data/dominos"):
+            os.makedirs("data/dominos", exist_ok=True)
+        torch.save(dataset, get_dominos_path(dataset_name, dataset_split, mix_rate_0_1, mix_rate_1_0, vertical))
     return dataset
