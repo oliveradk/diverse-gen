@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "2" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -631,11 +631,11 @@ if conf.plot_activations and conf.shared_backbone:
     model = model.to(conf.device)
     activations, labels = get_acts_and_labels(model, target_test_loader, conf.device)
     labels = labels.to('cpu')
-    pca_fig, pca_reducer = plot_activations(
+    pca_fig, pca_acts, pca_reducer = plot_activations(
         activations=activations, labels=labels, 
         classes_per_feature=classes_per_feat, transform="pca"
     )
-    umap_fig, umap_reducer = plot_activations(
+    umap_fig, umap_acts, umap_reducer = plot_activations(
         activations=activations, labels=labels, 
         classes_per_feature=classes_per_feat, transform="umap"
     )
@@ -643,6 +643,8 @@ if conf.plot_activations and conf.shared_backbone:
     pca_fig.savefig(f"{exp_dir}/activations_pretrain_pca.svg")
     umap_fig.savefig(f"{exp_dir}/activations_pretrain_umap.png")
     umap_fig.savefig(f"{exp_dir}/activations_pretrain_umap.svg")
+    np.save(f"{exp_dir}/activations_pretrain_pca.npy", pca_acts)
+    np.save(f"{exp_dir}/activations_pretrain_umap.npy", umap_acts)
     
 
 
@@ -904,19 +906,18 @@ try:
                           (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}" if not conf.use_group_labels else ""))
 
 
-            # save checkpoint if lowest validation loss
+            # plot activations if lowest validation loss
             if logger.metrics["val_loss"][-1] == min(logger.metrics["val_loss"]):
-                torch.save(net.state_dict(), f"{exp_dir}/checkpoint_{epoch}.pth")
                 # plot activations 
                 if conf.plot_activations and conf.shared_backbone:   
                     # get activations 
                     activations, labels = get_acts_and_labels(net.backbone, target_test_loader, conf.device)
                     labels = labels.to('cpu')
-                    pca_fig, pca_reducer = plot_activations(
+                    pca_fig, pca_acts, pca_reducer = plot_activations(
                         activations=activations, labels=labels, 
                         classes_per_feature=classes_per_feat, transform="pca"
                     )
-                    umap_fig, umap_reducer = plot_activations(
+                    umap_fig, umap_acts, umap_reducer = plot_activations(
                         activations=activations, labels=labels, 
                         classes_per_feature=classes_per_feat, transform="umap"
                     )
@@ -924,6 +925,8 @@ try:
                     pca_fig.savefig(f"{exp_dir}/activations_{epoch}_pca.svg")
                     umap_fig.savefig(f"{exp_dir}/activations_{epoch}_umap.png")
                     umap_fig.savefig(f"{exp_dir}/activations_{epoch}_umap.svg")
+                    np.save(f"{exp_dir}/activations_{epoch}_pca.npy", pca_acts)
+                    np.save(f"{exp_dir}/activations_{epoch}_umap.npy", umap_acts)
                     plt.close(pca_fig)
                     plt.close(umap_fig)
             

@@ -15,11 +15,12 @@ from utils.utils import feature_label_ls, group_labels_from_labels, to_device
 def get_acts_and_labels(model: nn.Module, loader: DataLoader, device: str):
     activations = []
     labels = []
-    for x, y, gl in tqdm(loader):
-        x, y, gl = to_device(x, y, gl, device)
-        acts = model(x)
-        activations.append((acts.detach().cpu()))
-        labels.append(gl)
+    with torch.no_grad():
+        for x, y, gl in tqdm(loader):
+            x, y, gl = to_device(x, y, gl, device)
+            acts = model(x)
+            activations.append(acts.cpu())
+            labels.append(gl)
     activations = torch.cat(activations, dim=0).squeeze()
     labels = torch.cat(labels, dim=0)
     labels = labels.squeeze()
@@ -79,7 +80,7 @@ def plot_activations(
 
 
     fig.tight_layout()
-    return fig, reducer
+    return fig, transformed_acts, reducer
 
 def compute_probe_acc(activations, labels, classes_per_feat):
     from sklearn.linear_model import LogisticRegression
