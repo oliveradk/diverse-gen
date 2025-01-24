@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "4" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -87,7 +87,7 @@ class Config:
     weight_decay: float = 2e-2
     epochs: int = 5
     scheduler: str = "cosine"
-    frac_warmup: float = 0.05
+    frac_warmup: float = 0.10
     num_epochs: int = 5
     effective_batch_size: int = 32
     forward_batch_size: int = 32
@@ -438,7 +438,7 @@ class MeasurementPredBackbone(nn.Module):
 
 
 pred_model = MeasurementPredBackbone(pretrained_model).to(conf.device)
-net = MultiHeadBackbone(pred_model, n_heads=conf.heads, feature_dim=conf.feature_dim, classes=1).to(conf.device)
+net = MultiHeadBackbone(pred_model, classes=[1 for _ in range(conf.heads)], feature_dim=conf.feature_dim).to(conf.device)
 
 if conf.freeze_model:
     for param in net.backbone.parameters():
@@ -462,7 +462,7 @@ num_training_steps = conf.num_epochs * len(source_train_loader) // (conf.effecti
 scheduler = get_scheduler(
     name=conf.scheduler,
     optimizer=opt,
-    num_warmup_steps=conf.frac_warmup * num_training_steps,
+    num_warmup_steps=round(conf.frac_warmup * num_training_steps),
     num_training_steps=num_training_steps
 )
 
@@ -478,13 +478,10 @@ elif conf.loss_type == LossType.TOPK:
         mix_rate = conf.mix_rate_lower_bound
         group_mix_rates = None
     loss_fn = ACELoss(
-        heads=conf.heads, 
-        classes=2, 
-        binary=True, 
+        classes_per_head=[1 for _ in range(conf.heads)], 
         mode="topk", 
         group_mix_rates=group_mix_rates,  # TODO: should ignore visible labels
         mix_rate=mix_rate,
-        pseudo_label_all_groups=conf.pseudo_label_all_groups, 
         device=conf.device
     )
 
@@ -516,7 +513,9 @@ def compute_src_losses(
 
 def compute_corrects(logits: torch.Tensor, head: int, y: torch.Tensor, binary: bool):
     if binary:
-        return ((logits[:, head] > 0) == y.flatten()).sum().item()
+        preds = (logits[:, head] > 0).to(torch.float32)
+        assert preds.shape == (logits.size(0), ), f"preds shape {preds.shape}, logits shape {logits.shape}"
+        return ((preds == y.flatten()).sum().item())
     else:
         logits = logits.view(logits.size(0), conf.heads, -1)
         return (logits[:, head].argmax(dim=-1) == y).sum().item()

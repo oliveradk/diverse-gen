@@ -4,7 +4,7 @@ from itertools import product
 
 from scipy.stats import binom
 
-def compute_head_losses(logits_per_head: list[t.Tensor], classes_per_head: list[int]):
+def compute_head_losses(logits_per_head: list[t.Tensor], classes_per_head: list[int], binary: bool):
     # all pairs of heads and labels 
     # e.g. if classes_per_head = [3, 2], then 
     # [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]
@@ -12,15 +12,16 @@ def compute_head_losses(logits_per_head: list[t.Tensor], classes_per_head: list[
     device = logits_per_head[0].device
 
     # define the criterion and label shape based on whether heads are binary or not
-    # if binary: 
-    #     assert classes == 2
-    #     criterion = t.nn.functional.binary_cross_entropy_with_logits
-    #     label_shape = logits[:, 0].shape
-    #     dtype = logits.dtype
-    # else:
-    criterion = t.nn.functional.cross_entropy
+    if binary: 
+        assert all([c == 2 for c in classes_per_head])
+        criterion = t.nn.functional.binary_cross_entropy_with_logits
+        dtype = logits_per_head[0].dtype
+        logits_per_head = [logit.squeeze(-1) for logit in logits_per_head]
+        # label_shape = logits_per_head[0].shape
+    else:
+        criterion = t.nn.functional.cross_entropy
+        dtype = t.long
     label_shape = (logits_per_head[0].shape[0],)
-    dtype = t.long
 
     # compute the loss for each head-label pair
     lossses = {}
@@ -31,7 +32,7 @@ def compute_head_losses(logits_per_head: list[t.Tensor], classes_per_head: list[
     return lossses
 
 def compute_group_losses(
-        head_losses: dict[tuple[int, int], t.Tensor], classes_per_head: list[int]
+    head_losses: dict[tuple[int, int], t.Tensor], classes_per_head: list[int]
 ):
     # get all groups of heads and labels
     # e.g. if classes_per_head = [3, 2], then 
@@ -43,9 +44,9 @@ def compute_group_losses(
     return group_losses
 
 def compute_loss(
-        losses: t.Tensor, mix_rate: float, mode: Literal['exp', 'prob', 'topk'], 
-        virtual_bs: Optional[int] = None
-    ):
+    losses: t.Tensor, mix_rate: float, mode: Literal['exp', 'prob', 'topk'], 
+    virtual_bs: Optional[int] = None
+):
     assert losses.ndim == 1
     bs = losses.shape[0]
     if mode == 'exp':
@@ -65,7 +66,6 @@ class ACELoss(t.nn.Module):
     def __init__(
         self, 
         classes_per_head: list[int] = [2, 2],
-        # binary: bool = False,
         mode: Literal['exp', 'prob', 'topk'] = 'exp',
         mix_rate: Optional[float] = None,
         group_mix_rates: Optional[dict[tuple[int, ...], float]] = None,
@@ -79,6 +79,7 @@ class ACELoss(t.nn.Module):
         self.group_mix_rates = group_mix_rates
         self.disagree_only = disagree_only
         self.device = device
+        self.binary = all([c == 1 for c in self.classes_per_head])
 
         if self.disagree_only:
             assert all([c == self.classes_per_head[0] for c in self.classes_per_head])
@@ -100,9 +101,10 @@ class ACELoss(t.nn.Module):
         logits_per_head = logits.split(self.classes_per_head, dim=1)
         
         # compute losses for each head and each label (n_heads * n_classes)
-        head_losses = compute_head_losses(logits_per_head, self.classes_per_head)
+        classes_per_head = [n_classes if n_classes != 1 else 2 for n_classes in self.classes_per_head]
+        head_losses = compute_head_losses(logits_per_head, classes_per_head, self.binary)
         # compute losses for each group (a set of labels for each head)
-        group_losses = compute_group_losses(head_losses, self.classes_per_head)
+        group_losses = compute_group_losses(head_losses, classes_per_head)
         # remove agreeing groups
         if self.disagree_only: 
             group_losses = {group: loss for group, loss in group_losses.items() if len(set(group)) > 1}
