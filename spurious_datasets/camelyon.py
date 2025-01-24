@@ -19,6 +19,7 @@ class CustomCamelyonDataset(Camelyon17Dataset):
 def get_camelyon_datasets(
     transform=None, 
     val_split=0.2, 
+    dataset_length=None,
 ):
     transform_list = [transforms.ToTensor()]
     if transform is not None:
@@ -30,6 +31,14 @@ def get_camelyon_datasets(
     source = dataset.get_subset(split="train", transform=transform)
     target = dataset.get_subset(split="val", transform=transform)
     test = dataset.get_subset(split="test", transform=transform)
+
+    if dataset_length is not None: 
+        source_frac = dataset_length / len(source)
+        target_frac = dataset_length / len(target)
+        test_frac = dataset_length / len(test)
+        source = dataset.get_subset(split="train", frac=source_frac, transform=transform)
+        target = dataset.get_subset(split="val", frac=target_frac, transform=transform)
+        test = dataset.get_subset(split="test", frac=test_frac, transform=transform)
 
     # train val splits 
     source_train, source_val = random_split(

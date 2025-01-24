@@ -425,7 +425,8 @@ elif conf.dataset.startswith("celebA"):
     )
 elif conf.dataset == "camelyon":
     source_train, source_val, target_train, target_val, target_test = get_camelyon_datasets(
-        transform=model_transform
+        transform=model_transform, 
+        dataset_length=conf.dataset_length
     )
 # elif conf.dataset == "civil_comments":
 #     source_train, source_val, target_train, target_val, target_test = get_civil_comments_datasets(
