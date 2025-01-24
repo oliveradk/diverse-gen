@@ -58,9 +58,11 @@ import torch
 @dataclass
 class Config:
     max_length: int = 256
-    batch_size: int = 32
-    epochs: int = 3
+    batch_size: int = 16
+    target_batch_size: int = 32
+    epochs: int = 2
     learning_rate: float = 2e-5
+    weight_decay: float = 1e-2
     dataset_length: int | None = 512
     device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     loss_type: LossType = LossType.TOPK 
@@ -224,8 +226,8 @@ target_test_dataset = IMDBDataset(dataset['test'], tokenizer, conf.max_length)
 # Create data loaders
 source_train_loader = DataLoader(source_train_dataset, batch_size=conf.batch_size, shuffle=True)
 source_val_loader = DataLoader(source_val_dataset, batch_size=conf.batch_size)
-target_train_loader = DataLoader(target_train_dataset, batch_size=conf.batch_size, shuffle=True)
-target_val_loader = DataLoader(target_val_dataset, batch_size=conf.batch_size)
+target_train_loader = DataLoader(target_train_dataset, batch_size=conf.target_batch_size, shuffle=True)
+target_val_loader = DataLoader(target_val_dataset, batch_size=conf.target_batch_size)
 target_test_loader = DataLoader(target_test_dataset, batch_size=conf.batch_size)
 
 
@@ -245,7 +247,7 @@ classes_per_head = [1, 1]  # Binary classification for both heads
 
 model = MultiHeadBackbone(model_builder(), classes_per_head, feature_dim).to(conf.device)
 criterion = nn.BCEWithLogitsLoss()
-optimizer = torch.optim.AdamW(model.parameters(), lr=conf.learning_rate)
+optimizer = torch.optim.AdamW(model.parameters(), lr=conf.learning_rate, weight_decay=conf.weight_decay)
 
 
 # In[ ]:
@@ -263,6 +265,9 @@ if conf.loss_type == LossType.TOPK:
 elif conf.loss_type == LossType.DIVDIS:
     from losses.divdis import DivDisLoss
     loss_fn = DivDisLoss(heads=2)  # Using 2 heads
+elif conf.loss_type == LossType.ERM:
+    from lossses.pass_through import PassThroughLoss
+    loss_fn = PassThroughLoss()
 else:
     raise ValueError(f"Loss type {conf.loss_type} not supported")
 
