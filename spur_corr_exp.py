@@ -800,8 +800,8 @@ if conf.plot_activations and conf.shared_backbone:
 from itertools import cycle
 try:
     if conf.freeze_heads:
-        # freeze second head (for dbat)
-        net.freeze_head(1)
+        # freeze first head (for dbat)
+        net.freeze_head(0)
     for epoch in range(conf.epochs):
         train_loader = zip(source_train_loader, cycle(target_train_loader))
         loader_len = len(source_train_loader)
@@ -809,8 +809,8 @@ try:
         for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
             # freeze heads for dbat
             if conf.freeze_heads and epoch == conf.head_1_epochs: 
-                net.unfreeze_head(1)
-                net.freeze_head(0)
+                net.unfreeze_head(0)
+                net.freeze_head(1)
             
             # source
             x, y, gl = to_device(*source_batch, conf.device)
