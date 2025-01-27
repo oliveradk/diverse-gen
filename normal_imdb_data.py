@@ -27,9 +27,6 @@ import matplotlib
 if not is_notebook():
     matplotlib.use('Agg')
 
-# set directory
-os.chdir("/nas/ucb/oliveradk/diverse-gen/")
-
 
 # In[ ]:
 
@@ -64,7 +61,7 @@ class Config:
     learning_rate: float = 2e-5
     weight_decay: float = 1e-2
     dataset_length: int | None = 512
-    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     loss_type: LossType = LossType.TOPK 
     aux_weight: float = 1.0 # Weight for auxiliary loss
     mix_rate_lower_bound: float = 0.1
@@ -288,15 +285,13 @@ from utils.utils import to_device
 # Training loop
 best_val_loss = float('inf')
 
-for epoch in range(conf.epochs):
-    print(f"Epoch {epoch + 1}/{conf.epochs}")
-    
+for epoch in tqdm(range(conf.epochs), desc="Epochs"):
     # Training
     model.train()
     total_loss = 0
     
-    train_iter = tqdm(zip(source_train_loader, cycle(target_train_loader)), total=len(source_train_loader))
-    train_iter.set_description("Train")
+    zipped_loaders = zip(source_train_loader, cycle(target_train_loader))
+    train_iter = tqdm(zipped_loaders, total=len(source_train_loader), desc="Train")
 
     for source_batch, target_batch in train_iter:
         # Source forward pass
@@ -345,6 +340,6 @@ for epoch in range(conf.epochs):
         best_val_loss = total_val_loss
         torch.save(model.state_dict(), f'{conf.exp_dir}/best_model.pt')
         print("Saved best model!")
-    
-    print()
+
+logger.flush()
 
