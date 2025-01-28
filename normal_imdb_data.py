@@ -43,6 +43,9 @@ from datasets import load_dataset
 from omegaconf import OmegaConf
 
 from losses.loss_types import LossType
+from losses.ace import ACELoss
+from losses.divdis import DivDisLoss
+from losses.pass_through import PassThroughLoss
 
 
 
@@ -60,7 +63,7 @@ class Config:
     epochs: int = 2
     learning_rate: float = 2e-5
     weight_decay: float = 1e-2
-    dataset_length: int | None = 512
+    dataset_length: int | None = None
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     loss_type: LossType = LossType.TOPK 
     aux_weight: float = 1.0 # Weight for auxiliary loss
@@ -252,7 +255,6 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=conf.learning_rate, weight_
 
 # Initialize loss function
 if conf.loss_type == LossType.TOPK:
-    from losses.ace import ACELoss
     loss_fn = ACELoss(
         classes_per_head=[1, 1],  # Binary classification
         mode="topk",
@@ -260,10 +262,8 @@ if conf.loss_type == LossType.TOPK:
         mix_rate=conf.mix_rate_lower_bound
     )
 elif conf.loss_type == LossType.DIVDIS:
-    from losses.divdis import DivDisLoss
     loss_fn = DivDisLoss(heads=2)  # Using 2 heads
 elif conf.loss_type == LossType.ERM:
-    from lossses.pass_through import PassThroughLoss
     loss_fn = PassThroughLoss()
 else:
     raise ValueError(f"Loss type {conf.loss_type} not supported")
