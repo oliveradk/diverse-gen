@@ -44,6 +44,7 @@ def test_waterbirds_all_losses(loss_type):
         cmd.extend([
             "freeze_heads=True", 
             "shared_backbone=False",
+            "binary=True",
         ])
     # Add configuration parameters
     cmd.extend([f"{k}={v}" for k, v in TEST_CONFIG.items()])
