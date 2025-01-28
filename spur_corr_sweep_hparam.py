@@ -59,6 +59,7 @@ results = {}
 
 for (env_name, env_config), (loss_name, loss_config), mix_rate in tqdm(configs, desc="Sweeping"):
     conf = {**env_config, **loss_config, "mix_rate": mix_rate}
+    conf["plot_activations"] = False
     exp_key = f"{env_name}_{loss_name}_{mix_rate}"
     sweep_dir = Path(hparam_dir, exp_key)
     executor = get_executor(sweep_dir, mem_gb=32)
