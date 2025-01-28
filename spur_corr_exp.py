@@ -633,14 +633,14 @@ else:
 if conf.plot_activations and conf.shared_backbone:
     model = model_builder()
     model = model.to(conf.device)
-    activations, labels = get_acts_and_labels(model, target_test_loader, conf.device)
-    labels = labels.to('cpu')
+    test_acts, test_labels = get_acts_and_labels(model, target_test_loader, conf.device)
+    test_labels = test_labels.to('cpu')
     pca_fig, pca_acts, pca_reducer = plot_activations(
-        activations=activations, labels=labels, 
+        activations=test_acts, labels=test_labels, 
         classes_per_feature=classes_per_feat, transform="pca"
     )
     umap_fig, umap_acts, umap_reducer = plot_activations(
-        activations=activations, labels=labels, 
+        activations=test_acts, labels=test_labels, 
         classes_per_feature=classes_per_feat, transform="umap"
     )
     pca_fig.savefig(f"{exp_dir}/activations_pretrain_pca.png")
@@ -657,7 +657,8 @@ if conf.plot_activations and conf.shared_backbone:
 
 # fit linear probe 
 if conf.plot_activations and conf.shared_backbone:
-    probe_acc, probe_acc_alt = compute_probe_acc(activations, labels, classes_per_feat)
+    train_acts, train_labels = get_acts_and_labels(model, target_train_loader, conf.device)
+    probe_acc, probe_acc_alt = compute_probe_acc(train_acts, train_labels, test_acts, test_labels, classes_per_feat)
     print(f"Accuracy: {probe_acc:.4f}")
     print(f"Alt Accuracy: {probe_acc_alt:.4f}")
     # nah I'll just try to picke the umap
@@ -878,8 +879,9 @@ try:
             
             # probe acc
             if conf.plot_activations and conf.shared_backbone:
-                activations, labels = get_acts_and_labels(net.backbone, target_test_loader, conf.device)
-                probe_acc, probe_acc_alt = compute_probe_acc(activations, labels, classes_per_feat)
+                train_acts, train_labels = get_acts_and_labels(model, target_train_loader, conf.device)
+                test_acts, test_labels = get_acts_and_labels(net.backbone, target_test_loader, conf.device)
+                probe_acc, probe_acc_alt = compute_probe_acc(train_acts, train_labels, test_acts, test_labels, classes_per_feat)
                 logger.add_scalar("test", "probe_acc", probe_acc, epoch)
                 logger.add_scalar("test", "probe_acc_alt", probe_acc_alt, epoch)
 

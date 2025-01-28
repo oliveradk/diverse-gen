@@ -82,17 +82,17 @@ def plot_activations(
     fig.tight_layout()
     return fig, transformed_acts, reducer
 
-def compute_probe_acc(activations, labels, classes_per_feat):
+def compute_probe_acc(train_acts, train_labels, test_acts, test_labels, classes_per_feat):
     from sklearn.linear_model import LogisticRegression
     
     lr = LogisticRegression(
         max_iter=10000, 
         multi_class='multinomial' if len(classes_per_feat) > 2 else 'ovr'
     )
-    label_classes = labels[:, 0].unique()
+    label_classes = train_labels[:, 0].unique()
     if len(label_classes) > 1:
-        lr.fit(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
-        acc = lr.score(activations.to('cpu').numpy(), labels[:, 0].to('cpu').numpy())
+        lr.fit(train_acts.to('cpu').numpy(), train_labels[:, 0].to('cpu').numpy())
+        acc = lr.score(test_acts.to('cpu').numpy(), test_labels[:, 0].to('cpu').numpy())
     else: 
         acc = 0
     
@@ -100,10 +100,10 @@ def compute_probe_acc(activations, labels, classes_per_feat):
         max_iter=10000, 
         multi_class='multinomial' if len(classes_per_feat) > 2 else 'ovr'
     )
-    alt_label_classes = labels[:, 1].unique()
+    alt_label_classes = train_labels[:, 1].unique()
     if len(alt_label_classes) > 1:
-        lr_alt.fit(activations.to('cpu').numpy(), labels[:, 1].to('cpu').numpy())
-        alt_acc = lr_alt.score(activations.to('cpu').numpy(), labels[:, 1].to('cpu').numpy())
+        lr_alt.fit(train_acts.to('cpu').numpy(), train_labels[:, 1].to('cpu').numpy())
+        alt_acc = lr_alt.score(test_acts.to('cpu').numpy(), test_labels[:, 1].to('cpu').numpy())
     else: 
         alt_acc = 0
     return acc, alt_acc
