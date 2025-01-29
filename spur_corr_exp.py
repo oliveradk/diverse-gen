@@ -108,9 +108,6 @@ class Config():
     shared_backbone: bool = True
     source_weight: float = 1.0
     aux_weight: float = 1.0
-    aux_weight_schedule: Optional[str] = None
-    aux_weight_t0: Optional[int] = None
-    aux_weight_t1: Optional[int] = None
     use_group_labels: bool = False
     freeze_heads: bool = False
     head_1_epochs: int = 5
@@ -132,6 +129,7 @@ class Config():
     mix_rate_schedule: Optional[str] = None
     mix_rate_t0: Optional[int] = None
     mix_rate_t1: Optional[int] = None
+    mix_rate_interval_frac: Optional[float] = None # for mix rate updates within epoch
     # optimizer 
     lr: float = 1e-4
     weight_decay: float = 1e-3 # 1e-4
@@ -143,7 +141,7 @@ class Config():
     num_workers: int = 4
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    plot_activations: bool = True
+    plot_activations: bool = False
 
 def str_to_tuple(s: str) -> tuple[int, ...]:
     return tuple(int(i) for i in s.split("_"))
@@ -810,34 +808,53 @@ if conf.plot_activations and conf.shared_backbone:
 # In[ ]:
 
 
+import copy
+valid_loss_fn = loss_fn 
+if isinstance(loss_fn, ACELoss) and conf.mix_rate_schedule is not None:
+    print('hello')
+    valid_loss_fn = copy.deepcopy(loss_fn)
+
+
+# In[ ]:
+
+
 # TODO: change diciotary values to source loss, target loss
 from itertools import cycle
 try:
     if conf.freeze_heads:
         # freeze first head (for dbat)
         net.freeze_head(0)
+    total_steps = 0
     for epoch in range(conf.epochs):
         train_loader = zip(source_train_loader, cycle(target_train_loader))
         loader_len = len(source_train_loader)
-        # train
+        ### Train
+        # mix rate schedule 
+        if isinstance(loss_fn, ACELoss):
+            if conf.mix_rate_schedule == "linear" and conf.mix_rate_interval_frac is None:
+                if epoch < conf.mix_rate_t0: 
+                    cur_mix_rate = 0
+                elif epoch >= conf.mix_rate_t1:
+                    cur_mix_rate = conf.mix_rate_lower_bound
+                else:
+                    cur_mix_rate = conf.mix_rate_lower_bound * (epoch - conf.mix_rate_t0) / (conf.mix_rate_t1 - conf.mix_rate_t0)
+                _mix_rate, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
+                loss_fn.group_mix_rates = group_mix_rates
+        
         for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
+            # update mix rate schedule
+            if isinstance(loss_fn, ACELoss):
+                if conf.mix_rate_schedule == "linear" and conf.mix_rate_interval_frac is not None:
+                    if total_steps % int(num_steps * conf.mix_rate_interval_frac) == 0:
+                        cur_mix_rate = conf.mix_rate_lower_bound * (total_steps / num_steps)
+                        _mix_rate, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
+                        print("updating mix rate", "steps", total_steps, "mix rate", cur_mix_rate)
+                        loss_fn.group_mix_rates = group_mix_rates
+                        loss_fn.mix_rate = cur_mix_rate
             # freeze heads for dbat
             if conf.freeze_heads and epoch == conf.head_1_epochs: 
                 net.unfreeze_head(0)
                 net.freeze_head(1)
-            
-            # mix rate schedule 
-            if isinstance(loss_fn, ACELoss):
-                if conf.mix_rate_schedule == "linear":
-                    if epoch < conf.mix_rate_t0: 
-                        cur_mix_rate = 0
-                    elif epoch >= conf.mix_rate_t1:
-                        cur_mix_rate = conf.mix_rate_lower_bound
-                    else:
-                        cur_mix_rate = conf.mix_rate_lower_bound * (epoch - conf.mix_rate_t0) / (conf.mix_rate_t1 - conf.mix_rate_t0)
-                    _mix_rate, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
-                    loss_fn.group_mix_rates = group_mix_rates
-            
             # source
             x, y, gl = to_device(*source_batch, conf.device)
             logits = net(x)
@@ -848,27 +865,16 @@ try:
             # target
             target_x, target_y, target_gl = to_device(*target_batch, conf.device)
             target_logits = net(target_x)
-            target_loss = loss_fn(target_logits)
-            # aux weight schedule
-            aux_weight = conf.aux_weight 
-            if conf.aux_weight_schedule == "linear":
-                if epoch < conf.aux_weight_t0:
-                    aux_weight = 0.0
-                elif epoch >= conf.aux_weight_t1:
-                    aux_weight = conf.aux_weight
-                else:
-                    aux_weight = conf.aux_weight * (epoch - conf.aux_weight_t0 + 1) / (conf.aux_weight_t1 - conf.aux_weight_t0)
-            
-            
+            target_loss = loss_fn(target_logits)           
             
             logger.add_scalar("train", "target_loss", target_loss.item(), epoch * loader_len + batch_idx)
-            logger.add_scalar("train", "weighted_target_loss", aux_weight * target_loss.item(), epoch * loader_len + batch_idx, to_metrics=False, to_tb=True)
+            logger.add_scalar("train", "weighted_target_loss", conf.aux_weight * target_loss.item(), epoch * loader_len + batch_idx, to_metrics=False, to_tb=True)
             # don't compute target loss before second head begins training
             if conf.freeze_heads and epoch < conf.head_1_epochs: 
                 target_loss = torch.tensor(0.0, device=conf.device)
             
             # full loss 
-            full_loss = conf.source_weight * xent + aux_weight * target_loss
+            full_loss = conf.source_weight * xent + conf.aux_weight * target_loss
             logger.add_scalar("train", "loss", full_loss.item(), epoch * loader_len + batch_idx)
             
             # backprop
@@ -877,17 +883,12 @@ try:
             opt.step()
             if scheduler is not None:
                 scheduler.step()
+            total_steps += 1
         
         # eval
         if (epoch + 1) % 1 == 0:
             net.eval()
             ### Validation 
-            # reset mix rate 
-            if isinstance(loss_fn, ACELoss):
-                if conf.mix_rate_schedule is not None:
-                    mix_rate, group_mix_rates = get_mix_rate(conf)
-                    loss_fn.group_mix_rates = group_mix_rates
-                    loss_fn.mix_rate = mix_rate
            
             # source
             total_val_loss = 0.0
@@ -903,7 +904,7 @@ try:
             # target
             weighted_target_val_loss = 0.0
             if len(target_val) > 0:  
-                target_val_metrics = eval(net, target_val_loader, conf.device, loss_fn, use_labels=False, stage="Target Val")
+                target_val_metrics = eval(net, target_val_loader, conf.device, valid_loss_fn, use_labels=False, stage="Target Val")
                 for k, v in target_val_metrics.items():
                     if 'count' not in k:
                         logger.add_scalar("val", f"target_{k}", v, epoch)
