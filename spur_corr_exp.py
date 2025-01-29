@@ -108,6 +108,9 @@ class Config():
     shared_backbone: bool = True
     source_weight: float = 1.0
     aux_weight: float = 1.0
+    aux_weight_schedule: Optional[str] = None
+    aux_weight_t0: Optional[int] = None
+    aux_weight_t1: Optional[int] = None
     use_group_labels: bool = False
     freeze_heads: bool = False
     head_1_epochs: int = 5
@@ -126,6 +129,9 @@ class Config():
     mix_rate_lower_bound: Optional[float] = 0.1
     group_mix_rate_lower_bounds: Optional[dict[str, float]] = None # field(default_factory=lambda: {"0_1": 0.1, "1_0": 0.1})
     disagree_only: bool = False
+    mix_rate_schedule: Optional[str] = None
+    mix_rate_t0: Optional[int] = None
+    mix_rate_t1: Optional[int] = None
     # optimizer 
     lr: float = 1e-4
     weight_decay: float = 1e-3 # 1e-4
@@ -582,6 +588,7 @@ else:
     # constant learning rate
     scheduler = None
 
+
 # loss function
 if conf.loss_type == LossType.DIVDIS:
     loss_fn = DivDisLoss(heads=conf.heads)
@@ -597,20 +604,26 @@ elif conf.loss_type == LossType.SMOOTH:
 elif conf.loss_type == LossType.ERM:
     loss_fn = PassThroughLoss()
 elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
-    if conf.aggregate_mix_rate:
-        mix_rate = conf.mix_rate_lower_bound 
-        group_mix_rates = None
-    elif conf.group_mix_rate_lower_bounds is not None:
-        mix_rate = None 
-        group_mix_rates = conf.group_mix_rate_lower_bounds
-    else:
-        mix_rate = None 
-        if conf.dataset == "multi-nli" and conf.use_group_labels:
-            ood_groups = [(0, 1), (1, 0), (2, 0)]
-        else: 
-            ood_groups = [gl for gl in feature_label_ls(classes_per_head)
-                          if any(gl[0] != gl[i] for i in range(1, len(gl)))]
-        group_mix_rates = {group: conf.mix_rate_lower_bound / len(ood_groups) for group in ood_groups}
+    def get_mix_rate(conf, mix_rate_lb_override=None, group_mix_rate_lb_override=None):
+        mix_rate_lower_bound = mix_rate_lb_override if mix_rate_lb_override is not None else conf.mix_rate_lower_bound
+        group_mix_rate_lower_bounds = group_mix_rate_lb_override if group_mix_rate_lb_override is not None else conf.group_mix_rate_lower_bounds
+        if conf.aggregate_mix_rate:
+            mix_rate = mix_rate_lower_bound
+            group_mix_rates = None
+        elif conf.group_mix_rate_lower_bounds is not None:
+            mix_rate = None 
+            group_mix_rates = group_mix_rate_lower_bounds
+        else:
+            mix_rate = None 
+            if conf.dataset == "multi-nli" and conf.use_group_labels:
+                ood_groups = [(0, 1), (1, 0), (2, 0)]
+            else: 
+                ood_groups = [gl for gl in feature_label_ls(classes_per_head)
+                            if any(gl[0] != gl[i] for i in range(1, len(gl)))]
+            group_mix_rates = {group: mix_rate_lower_bound / len(ood_groups) for group in ood_groups}
+        return mix_rate, group_mix_rates
+    
+    mix_rate, group_mix_rates = get_mix_rate(conf)
 
     loss_fn = ACELoss(
         classes_per_head=classes_per_head,
@@ -813,6 +826,18 @@ try:
                 net.unfreeze_head(0)
                 net.freeze_head(1)
             
+            # mix rate schedule 
+            if isinstance(loss_fn, ACELoss):
+                if conf.mix_rate_schedule == "linear":
+                    if epoch < conf.mix_rate_t0: 
+                        cur_mix_rate = 0
+                    elif epoch >= conf.mix_rate_t1:
+                        cur_mix_rate = conf.mix_rate_lower_bound
+                    else:
+                        cur_mix_rate = conf.mix_rate_lower_bound * (epoch - conf.mix_rate_t0) / (conf.mix_rate_t1 - conf.mix_rate_t0)
+                    _mix_rate, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
+                    loss_fn.group_mix_rates = group_mix_rates
+            
             # source
             x, y, gl = to_device(*source_batch, conf.device)
             logits = net(x)
@@ -824,14 +849,26 @@ try:
             target_x, target_y, target_gl = to_device(*target_batch, conf.device)
             target_logits = net(target_x)
             target_loss = loss_fn(target_logits)
+            # aux weight schedule
+            aux_weight = conf.aux_weight 
+            if conf.aux_weight_schedule == "linear":
+                if epoch < conf.aux_weight_t0:
+                    aux_weight = 0.0
+                elif epoch >= conf.aux_weight_t1:
+                    aux_weight = conf.aux_weight
+                else:
+                    aux_weight = conf.aux_weight * (epoch - conf.aux_weight_t0 + 1) / (conf.aux_weight_t1 - conf.aux_weight_t0)
+            
+            
+            
             logger.add_scalar("train", "target_loss", target_loss.item(), epoch * loader_len + batch_idx)
-            logger.add_scalar("train", "weighted_target_loss", conf.aux_weight * target_loss.item(), epoch * loader_len + batch_idx, to_metrics=False, to_tb=True)
+            logger.add_scalar("train", "weighted_target_loss", aux_weight * target_loss.item(), epoch * loader_len + batch_idx, to_metrics=False, to_tb=True)
             # don't compute target loss before second head begins training
             if conf.freeze_heads and epoch < conf.head_1_epochs: 
                 target_loss = torch.tensor(0.0, device=conf.device)
             
             # full loss 
-            full_loss = conf.source_weight * xent + conf.aux_weight * target_loss
+            full_loss = conf.source_weight * xent + aux_weight * target_loss
             logger.add_scalar("train", "loss", full_loss.item(), epoch * loader_len + batch_idx)
             
             # backprop
@@ -845,6 +882,13 @@ try:
         if (epoch + 1) % 1 == 0:
             net.eval()
             ### Validation 
+            # reset mix rate 
+            if isinstance(loss_fn, ACELoss):
+                if conf.mix_rate_schedule is not None:
+                    mix_rate, group_mix_rates = get_mix_rate(conf)
+                    loss_fn.group_mix_rates = group_mix_rates
+                    loss_fn.mix_rate = mix_rate
+           
             # source
             total_val_loss = 0.0
             total_val_weighted_loss = 0.0
