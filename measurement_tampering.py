@@ -19,7 +19,7 @@ def is_notebook() -> bool:
 
 import os
 if is_notebook():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "4" #"1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"1"
     # os.environ['CUDA_LAUNCH_BLOCKING']="1"
     # os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -41,6 +41,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from collections import defaultdict
 from typing import Optional
+import copy
 
 import numpy as np
 import torch
@@ -77,12 +78,35 @@ from datetime import datetime
 from dataclasses import dataclass, field
 @dataclass 
 class Config: 
+    seed: int = 42
+    # loss
     loss_type: LossType = LossType.TOPK
     one_sided_ace: bool = True
     ace_agree: bool = False
     pseudo_label_all_groups: bool = False
+    source_weight: float = 1.0
+    aux_weight: float = 1.0
+    mix_rate_lower_bound: float = 0.1
+    mix_rate_schedule: Optional[str] = None
+    mix_rate_t0: Optional[int] = None
+    mix_rate_t1: Optional[int] = None
+    # model
     model: str = "codegen-350M-mono-measurement_pred-diamonds-seed0"#"pythia-1_4b-deduped-measurement_pred-generated_stories"
+    binary: bool = True
+    heads: int = 2
+    train: bool = True
+    freeze_model: bool = False
+    load_prior_probe: bool = False
+    # data
     dataset: str = "diamonds-seed0" #"generated_stories"
+    max_length: int = 1024
+    feature_dim: int = 1024
+    dataset_len: Optional[int] = None
+    split_source_target: bool = True
+    target_only_disagree: bool = False
+    source_labels: Optional[list[str| None]] = None # field(default_factory=lambda: ["sensors_agree"])
+    target_labels: Optional[list[str| None]] = None # field(default_factory=lambda: ["sensors_agree"])
+    # training
     lr: float = 2e-5 
     weight_decay: float = 2e-2
     epochs: int = 5
@@ -92,22 +116,7 @@ class Config:
     effective_batch_size: int = 32
     forward_batch_size: int = 32
     micro_batch_size: int = 4
-    seed: int = 42
-    max_length: int = 1024
-    feature_dim: int = 1024
-    dataset_len: Optional[int] = None
-    binary: bool = True
-    heads: int = 2
-    train: bool = True
-    freeze_model: bool = False
-    load_prior_probe: bool = False
-    source_weight: float = 1.0
-    aux_weight: float = 1.0
-    split_source_target: bool = True
-    target_only_disagree: bool = False
-    mix_rate_lower_bound: float = 0.1
-    source_labels: Optional[list[str| None]] = None # field(default_factory=lambda: ["sensors_agree"])
-    target_labels: Optional[list[str| None]] = None # field(default_factory=lambda: ["sensors_agree"])
+    # misc
     bootstrap_eval: bool = True
     n_bootstrap_samples: int = 100
     num_workers: int = 1
@@ -466,17 +475,23 @@ scheduler = get_scheduler(
     num_training_steps=num_training_steps
 )
 
+def get_mix_rate(conf, mix_rate_lb_override: Optional[float] = None):
+    mix_rate_lb = mix_rate_lb_override if mix_rate_lb_override is not None else conf.mix_rate_lower_bound
+    if conf.one_sided_ace:
+        group_mix_rates = {(0,0) if conf.ace_agree else (0,1): mix_rate_lb}
+        mix_rate = None
+    else:
+        mix_rate = mix_rate_lb
+        group_mix_rates = None
+    return mix_rate, group_mix_rates
+
+
 if conf.loss_type == LossType.DIVDIS:
     loss_fn = DivDisLoss(heads=2)
 elif conf.loss_type == LossType.ERM:
     loss_fn = PassThroughLoss()
 elif conf.loss_type == LossType.TOPK:
-    if conf.one_sided_ace:
-        group_mix_rates = {(0,0) if conf.ace_agree else (0,1): conf.mix_rate_lower_bound}
-        mix_rate = None
-    else:
-        mix_rate = conf.mix_rate_lower_bound
-        group_mix_rates = None
+    mix_rate, group_mix_rates = get_mix_rate(conf)
     loss_fn = ACELoss(
         classes_per_head=[1 for _ in range(conf.heads)], 
         mode="topk", 
@@ -484,6 +499,10 @@ elif conf.loss_type == LossType.TOPK:
         mix_rate=mix_rate,
         device=conf.device
     )
+
+val_loss_fn = loss_fn
+if conf.loss_type == LossType.TOPK and conf.mix_rate_schedule is not None:
+    val_loss_fn = copy.deepcopy(loss_fn)
 
 
 # In[ ]:
@@ -753,6 +772,19 @@ for epoch in range(conf.epochs):
     source_batch_corrects = {i: 0 for i in range(conf.heads)}
     target_batch_corrects = {(i, label): 0 for i in range(conf.heads) for label in ["y", "all_sensors", "sensors_agree"]}
     for batch_idx, (x, y, gl) in tqdm(enumerate(source_train_loader), desc="Train", total=len(source_train_loader)):
+
+        # update mix rate 
+        if conf.loss_type == LossType.TOPK and conf.mix_rate_schedule is not None:
+            if epoch >= conf.mix_rate_t1: 
+                mix_rate = conf.mix_rate_lower_bound
+            elif epoch < conf.mix_rate_t0:
+                mix_rate = 0
+            else:
+                mix_rate = conf.mix_rate_lower_bound * ((epoch - conf.mix_rate_t0) / (conf.mix_rate_t1 - conf.mix_rate_t0))
+            print(f"Epoch {epoch} mix rate: {mix_rate}")
+            _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=mix_rate)
+            loss_fn.group_mix_rates = group_mix_rates
+
         # compute source logits with micro batch 
         x, y, gl = to_device(x, y, gl, conf.device)
         logits = net(x)
@@ -861,7 +893,7 @@ for epoch in range(conf.epochs):
                     x, y, gl = to_device(*batch, conf.device)
                     logits_val = net(x)
                     div_loss, labeled_target_loss = compute_target_loss(
-                        logits_val, y, gl, loss_fn, conf.loss_type, conf.target_labels, 
+                        logits_val, y, gl, val_loss_fn, conf.loss_type, conf.target_labels, 
                         only_disagreeing_labels=conf.target_only_disagree
                     )
                     div_losses_val.append(div_loss.item())
