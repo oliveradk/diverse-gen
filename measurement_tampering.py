@@ -111,7 +111,7 @@ class Config:
     weight_decay: float = 2e-2
     epochs: int = 5
     scheduler: str = "cosine"
-    frac_warmup: float = 0.10
+    frac_warmup_steps: float = 0.10
     num_epochs: int = 5
     effective_batch_size: int = 32
     forward_batch_size: int = 32
@@ -471,7 +471,7 @@ num_training_steps = conf.num_epochs * len(source_train_loader) // (conf.effecti
 scheduler = get_scheduler(
     name=conf.scheduler,
     optimizer=opt,
-    num_warmup_steps=round(conf.frac_warmup * num_training_steps),
+    num_warmup_steps=round(conf.frac_warmup_steps * num_training_steps),
     num_training_steps=num_training_steps
 )
 
