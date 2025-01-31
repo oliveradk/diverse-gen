@@ -51,9 +51,11 @@ def compute_loss(
     bs = losses.shape[0]
     if mode == 'exp':
         exp_weight = t.exp(-t.arange(bs, device=losses.device))
+        losses = t.sort(losses, dim=0, descending=False).values
         loss = (losses * exp_weight).mean()
     elif mode == 'prob':
-        prob_weight = t.tensor([binom.pmf(i, bs, mix_rate) / i for i in range(bs)])
+        prob_weight = t.tensor([binom.pmf(i, bs, mix_rate) / i for i in range(bs)]).to(losses.device)
+        losses = t.sort(losses, dim=0, descending=False).values
         loss = (losses * prob_weight).sum()
     elif mode == 'topk':
         topk_bs = virtual_bs if virtual_bs is not None else bs
