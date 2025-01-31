@@ -55,6 +55,12 @@ def run_experiments(executor, experiments: list, script_name: str):
             jobs.append(executor.submit(function))
     return jobs
 
+def get_conf_dir(conf_name: tuple, exp_dir: Path):
+    names, idx = conf_name[:-1], conf_name[-1]
+    names = [str(name) for name in names]
+    assert isinstance(idx, int), "idx must be an integer"
+    return f"{exp_dir}/{'_'.join(names)}/{idx}"
+
 
 class ExperimentCommandFunction(CommandFunction):
     def __init__(self, script_name: str, conf: dict, metric: str, parent_dir: Path):
@@ -65,10 +71,10 @@ class ExperimentCommandFunction(CommandFunction):
         super().__init__(["python", script_name] + conf_to_args(conf))
     
     def __call__(self, params: dict):
-        # set exp dir 
-        exp_dir = Path(self.parent_dir, "_".join([f"{k}-{v}" for k, v in params.items()]))
         # randomly generate seed 
         seed = np.random.randint(10000)
+        # set exp dir 
+        exp_dir = Path(self.parent_dir) / str(seed)
         # convert to args
         param_args = conf_to_args({**params, "exp_dir": exp_dir, "seed": seed})
         # run experiment 
@@ -81,8 +87,3 @@ class ExperimentCommandFunction(CommandFunction):
         return metric_val
 
 
-def get_conf_dir(conf_name: tuple, exp_dir: Path):
-    names, idx = conf_name[:-1], conf_name[-1]
-    names = [str(name) for name in names]
-    assert isinstance(idx, int), "idx must be an integer"
-    return f"{exp_dir}/{'_'.join(names)}/{idx}"

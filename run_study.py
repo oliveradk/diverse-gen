@@ -1,0 +1,104 @@
+from typing import Optional, Dict
+import subprocess
+from pathlib import Path
+import json
+from datetime import datetime as dt
+from dataclasses import dataclass, field
+from functools import partial
+
+import numpy as np
+from omegaconf import OmegaConf
+import optuna
+from optuna.trial import Trial
+from optuna.samplers import TPESampler
+
+from utils.utils import conf_to_args
+from utils.exp_utils import get_conf_dir
+
+def get_storage_path(study_dir: str):
+    return f"sqlite:///{study_dir}/optuna_study.db"
+
+@dataclass 
+class HparamConfig: 
+    type: str 
+    range: Optional[list] = None
+    choices: Optional[list] = None
+    log: bool = False
+
+@dataclass
+class Config: 
+    args: list[str] = field(default_factory=list)
+    script_name: str = "spur_corr_exp.py"
+    hparams: Dict[str, HparamConfig] = field(default_factory=dict)
+    n_trials: int = 50
+    study_name: str = "hparam_study"
+    study_dir: str = f"output/hparam_study/{dt.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+
+def objective(trial: Trial, conf: Config): 
+    hparams = {}
+    for name, param in conf.hparams.items():
+        if param.type == "float":
+            hparams[name] = trial.suggest_float(name, *param.range, log=param.log)
+        elif param.type == "int":
+            hparams[name] = trial.suggest_int(name, *param.range)
+        elif param.type == "categorical":
+            hparams[name] = trial.suggest_categorical(name, param.choices)
+        else:
+            raise ValueError(f"Invalid parameter type: {param.type}")
+    
+    seed = np.random.randint(0, 1000)
+    exp_dir = Path(conf.study_dir) / str(trial.number)
+
+    trial_conf = {
+        "exp_dir": exp_dir,
+        "seed": seed,
+        **hparams,
+    }
+
+    cmd = ["python", conf.script_name] + conf.args + conf_to_args(trial_conf)
+
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    with open(exp_dir / "stdout.log", "w") as out_f, open(exp_dir / "stderr.log", "w") as err_f:
+        result = subprocess.run(
+            cmd, 
+            check=True,
+            stdout=out_f,
+            stderr=err_f, 
+            text=True
+        )
+    if result.returncode != 0:
+        raise ValueError(f"Experiment failed with return code {result.returncode}")
+
+    # load metrics 
+    with open(Path(exp_dir, "metrics.json"), "r") as f:
+        metrics = json.load(f)
+    
+    min_loss = min(metrics["val_loss"])
+
+    return min_loss
+
+def main():
+    base_conf = OmegaConf.structured(Config())
+    cli_conf = OmegaConf.from_cli()
+    conf = OmegaConf.merge(base_conf, cli_conf)
+
+    storage_path = get_storage_path(conf.study_dir)
+
+    sampler = TPESampler(seed=42)
+
+    # Create study with TPE sampler and pruner
+    study = optuna.create_study(
+        study_name=conf.study_name,
+        storage=storage_path,
+        sampler=sampler,
+        direction="minimize",
+        load_if_exists=True
+    )
+
+    # Optimize with 50 trials
+    study.optimize(partial(objective, conf=conf), n_trials=conf.n_trials)
+
+    print("Best trial: ", study.best_trial)
+
+if __name__ == "__main__":
+    main()
