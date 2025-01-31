@@ -93,6 +93,7 @@ def update_idxs_from_mix_rate(
     cur_mix_rate = (n_ood) / (n_ood + n_id)
 
     if cur_mix_rate < mix_rate:  # need to remove iid instances 
+        # mix rate = n_ood / (n_ood + n_id) -> n_id = n_ood / mix_rate - n_ood
         n_id_target = round(n_ood / mix_rate) - n_ood
         # group group
         id_group_n_instances = _get_group_n_instances(iid_group_idxs, n_id_target)
