@@ -166,22 +166,6 @@ conf = Config()
 # In[ ]:
 
 
-# conf.dataset = "multi-nli"
-# conf.lr = 1e-5 
-# conf.lr_scheduler = "cosine"
-# conf.model = "bert"
-# conf.combine_neut_entail = False # True (done)
-# conf.contra_no_neg = True # False
-# conf.use_group_labels = False # True
-# conf.source_cc = True # False
-# conf.mix_rate = None # 0.5, 1.0, 0.1 
-# conf.mix_rate_lower_bound = 0.1
-# conf.dataset_length = 1024
-
-
-# In[ ]:
-
-
 # if conf.dataset in ["waterbirds", "celebA-0", "celebA-1", "celebA-2", "toy_grid"]:
 #     if conf.loss_type == LossType.TOPK and conf.mix_rate_lower_bound == 0.1:
 #         conf.aux_weight = 7.0 
@@ -468,6 +452,18 @@ if conf.binary:
     assert all([c == 2 for c in classes_per_head])
     classes_per_head = [1 for c in classes_per_head]
 
+
+
+# In[ ]:
+
+
+# # class distributions
+
+# gl_df = pd.DataFrame(target_train.dataset.feature_labels[target_train.indices])
+# ood_counts = gl_df.value_counts()[0][1] + gl_df.value_counts()[1][0]
+# counts_01 = gl_df.value_counts()[0][1]
+# counts_10 = gl_df.value_counts()[1][0]
+# print(f"OOD counts: {ood_counts}, counts_01: {counts_01 / len(gl_df)}, counts_10: {counts_10 / len(gl_df)}")
 
 
 # In[ ]:
@@ -838,7 +834,7 @@ try:
                     cur_mix_rate = conf.mix_rate_lower_bound
                 else:
                     cur_mix_rate = conf.mix_rate_lower_bound * (epoch - conf.mix_rate_t0) / (conf.mix_rate_t1 - conf.mix_rate_t0)
-                _mix_rate, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
+                _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
                 loss_fn.group_mix_rates = group_mix_rates
         
         for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
@@ -847,10 +843,9 @@ try:
                 if conf.mix_rate_schedule == "linear" and conf.mix_rate_interval_frac is not None:
                     if total_steps % int(num_steps * conf.mix_rate_interval_frac) == 0:
                         cur_mix_rate = conf.mix_rate_lower_bound * (total_steps / num_steps)
-                        _mix_rate, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
+                        _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
                         print("updating mix rate", "steps", total_steps, "mix rate", cur_mix_rate)
                         loss_fn.group_mix_rates = group_mix_rates
-                        loss_fn.mix_rate = cur_mix_rate
             # freeze heads for dbat
             if conf.freeze_heads and epoch == conf.head_1_epochs: 
                 net.unfreeze_head(0)
