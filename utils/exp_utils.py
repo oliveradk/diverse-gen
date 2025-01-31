@@ -79,3 +79,10 @@ class ExperimentCommandFunction(CommandFunction):
         # get metric value
         metric_val = np.nanmin(metrics[self.metric])
         return metric_val
+
+
+def get_conf_dir(conf_name: tuple, exp_dir: Path):
+    names, idx = conf_name[:-1], conf_name[-1]
+    names = [str(name) for name in names]
+    assert isinstance(idx, int), "idx must be an integer"
+    return f"{exp_dir}/{'_'.join(names)}/{idx}"
