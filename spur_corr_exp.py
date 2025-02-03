@@ -124,6 +124,8 @@ class Config():
     # topk # TODO: generalize properly configure group mix rates for MLI
     aggregate_mix_rate: bool = False
     mix_rate_lower_bound: Optional[float] = 0.1
+    mix_rate_lower_bound_01: Optional[float] = None
+    mix_rate_lower_bound_10: Optional[float] = None
     group_mix_rate_lower_bounds: Optional[dict[str, float]] = None # field(default_factory=lambda: {"0_1": 0.1, "1_0": 0.1})
     disagree_only: bool = False
     mix_rate_schedule: Optional[str] = None
@@ -150,11 +152,16 @@ def post_init(conf: Config, overrides: list[str]=[]):
     if conf.freeze_heads and "head_1_epochs" not in overrides:
         conf.head_1_epochs = round(conf.epochs / 2)
     
+    # set group mix rate lower bounds based on 01 10 (kinda hacky for doing hparam searches)
+    if conf.mix_rate_lower_bound_01 is not None or conf.mix_rate_lower_bound_10 is not None:
+        assert conf.group_mix_rate_lower_bounds is None
+        conf.group_mix_rate_lower_bounds = {
+            "0_1": conf.mix_rate_lower_bound_01 if conf.mix_rate_lower_bound_01 is not None else 0,
+            "1_0": conf.mix_rate_lower_bound_10 if conf.mix_rate_lower_bound_10 is not None else 0,
+        }
+    
     if conf.group_mix_rate_lower_bounds is not None:
         conf.group_mix_rate_lower_bounds = {str_to_tuple(k): v for k, v in conf.group_mix_rate_lower_bounds.items()}
-
-    if conf.mix_rate_lower_bound is None:
-        conf.mix_rate_lower_bound = conf.mix_rate
 
 
 # In[ ]:
