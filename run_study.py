@@ -30,7 +30,10 @@ class Config:
     args: list[str] = field(default_factory=list)
     script_name: str = "spur_corr_exp.py"
     hparams: Dict[str, HparamConfig] = field(default_factory=dict)
-    n_trials: int = 50
+    n_trials: int = 64
+    n_startup_trials: int = 10
+    n_ei_candidates: int = 100
+    sampler_seed: int = 42
     study_name: str = "hparam_study"
     study_dir: str = f"output/hparam_study/{dt.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
@@ -84,7 +87,11 @@ def main():
 
     storage_path = get_storage_path(conf.study_dir)
 
-    sampler = TPESampler(seed=42)
+    sampler = TPESampler(
+        seed=conf.sampler_seed,
+        n_startup_trials=conf.n_startup_trials,
+        n_ei_candidates=conf.n_ei_candidates
+    )
 
     # Create study with TPE sampler and pruner
     study = optuna.create_study(
@@ -95,7 +102,7 @@ def main():
         load_if_exists=True
     )
 
-    # Optimize with 50 trials
+    # Optimize
     study.optimize(partial(objective, conf=conf), n_trials=conf.n_trials)
 
     print("Best trial: ", study.best_trial)
