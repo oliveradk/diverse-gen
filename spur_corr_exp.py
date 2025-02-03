@@ -261,6 +261,13 @@ if not is_notebook():
     overrride_keys = overrides.keys()
     conf_dict = OmegaConf.merge(OmegaConf.structured(conf), overrides)
     conf = Config(**conf_dict)
+
+exp_dir = conf.exp_dir
+os.makedirs(exp_dir, exist_ok=True)
+
+# save full config to exp_dir
+with open(f"{exp_dir}/config.yaml", "w") as f:
+    OmegaConf.save(config=conf, f=f)
 post_init(conf, overrride_keys)
 
 
@@ -269,19 +276,6 @@ post_init(conf, overrride_keys)
 
 if conf.heads != 2:
     raise ValueError("Only 2 heads currently supported")
-
-
-# In[ ]:
-
-
-# create directory from config
-from dataclasses import asdict
-exp_dir = conf.exp_dir
-os.makedirs(exp_dir, exist_ok=True)
-
-# save full config to exp_dir
-with open(f"{exp_dir}/config.yaml", "w") as f:
-    OmegaConf.save(config=conf, f=f)
 
 
 # In[ ]:
@@ -534,6 +528,14 @@ class DivisibleBatchSampler(torch.utils.data.Sampler):
 
     def __len__(self):
         return self.total_size
+
+
+# In[ ]:
+
+
+# TODO: need to refactor mix rate schedule 
+# I guess just add if else for mix rate or group mix rates
+# 
 
 
 # In[ ]:
@@ -821,6 +823,30 @@ if isinstance(loss_fn, ACELoss) and conf.mix_rate_schedule is not None:
 # In[ ]:
 
 
+def get_cur_mix_rate(conf, epoch): 
+    cur_mix_rate = None
+    cur_group_mix_rates = None
+    if epoch < conf.mix_rate_t0: # set to 0
+        if conf.mix_rate_lower_bound is not None:
+            cur_mix_rate = 0 
+        if conf.group_mix_rate_lower_bounds is not None:
+            cur_group_mix_rates = {group: 0 for group in conf.group_mix_rate_lower_bounds.keys()}
+    elif epoch >= conf.mix_rate_t1: # set to lower bound
+        if conf.mix_rate_lower_bound is not None:
+            cur_mix_rate = conf.mix_rate_lower_bound
+        if conf.group_mix_rate_lower_bounds is not None:
+            cur_group_mix_rates = {group: conf.group_mix_rate_lower_bounds[group] for group in conf.group_mix_rate_lower_bounds.keys()}
+    else: # set to linear schedule
+        if conf.mix_rate_lower_bound is not None:
+            cur_mix_rate = conf.mix_rate_lower_bound * (epoch - conf.mix_rate_t0) / (conf.mix_rate_t1 - conf.mix_rate_t0)
+        if conf.group_mix_rate_lower_bounds is not None:
+            cur_group_mix_rates = {group: conf.group_mix_rate_lower_bounds[group] * (epoch - conf.mix_rate_t0) / (conf.mix_rate_t1 - conf.mix_rate_t0) for group in conf.group_mix_rate_lower_bounds.keys()}
+    return cur_mix_rate, cur_group_mix_rates
+
+
+# In[ ]:
+
+
 # TODO: change diciotary values to source loss, target loss
 from itertools import cycle
 try:
@@ -835,13 +861,8 @@ try:
         # mix rate schedule 
         if isinstance(loss_fn, ACELoss):
             if conf.mix_rate_schedule == "linear" and conf.mix_rate_interval_frac is None:
-                if epoch < conf.mix_rate_t0: 
-                    cur_mix_rate = 0
-                elif epoch >= conf.mix_rate_t1:
-                    cur_mix_rate = conf.mix_rate_lower_bound
-                else:
-                    cur_mix_rate = conf.mix_rate_lower_bound * (epoch - conf.mix_rate_t0) / (conf.mix_rate_t1 - conf.mix_rate_t0)
-                _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
+                cur_mix_rate, cur_group_mix_rates = get_cur_mix_rate(conf, epoch)
+                _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate, group_mix_rate_lb_override=cur_group_mix_rates)
                 loss_fn.group_mix_rates = group_mix_rates
         
         for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
@@ -849,8 +870,9 @@ try:
             if isinstance(loss_fn, ACELoss):
                 if conf.mix_rate_schedule == "linear" and conf.mix_rate_interval_frac is not None:
                     if total_steps % int(num_steps * conf.mix_rate_interval_frac) == 0:
-                        cur_mix_rate = conf.mix_rate_lower_bound * (total_steps / num_steps)
-                        _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate)
+                        cur_mix_rate = conf.mix_rate_lower_bound * (total_steps / num_steps) if conf.mix_rate_lower_bound is not None else None
+                        cur_group_mix_rates = {group: conf.group_mix_rate_lower_bounds[group] * (total_steps / num_steps) for group in conf.group_mix_rate_lower_bounds.keys()} if conf.group_mix_rate_lower_bounds is not None else None
+                        _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate, group_mix_rate_lb_override=cur_group_mix_rates)
                         print("updating mix rate", "steps", total_steps, "mix rate", cur_mix_rate)
                         loss_fn.group_mix_rates = group_mix_rates
             # freeze heads for dbat
