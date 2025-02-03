@@ -5,12 +5,12 @@ import json
 from datetime import datetime as dt
 from dataclasses import dataclass, field
 from functools import partial
-
+from typing import Literal
 import numpy as np
 from omegaconf import OmegaConf
 import optuna
 from optuna.trial import Trial
-from optuna.samplers import TPESampler
+from optuna.samplers import TPESampler, RandomSampler, QMCSampler
 
 from utils.utils import conf_to_args
 from utils.exp_utils import get_conf_dir
@@ -31,6 +31,7 @@ class Config:
     script_name: str = "spur_corr_exp.py"
     hparams: Dict[str, HparamConfig] = field(default_factory=dict)
     n_trials: int = 64
+    sampler_type: str = "tpe" # random, quasi-random
     n_startup_trials: int = 10
     n_ei_candidates: int = 100
     sampler_seed: int = 42
@@ -87,11 +88,22 @@ def main():
 
     storage_path = get_storage_path(conf.study_dir)
 
-    sampler = TPESampler(
-        seed=conf.sampler_seed,
-        n_startup_trials=conf.n_startup_trials,
-        n_ei_candidates=conf.n_ei_candidates
-    )
+    if conf.sampler_type == "tpe":
+        sampler = TPESampler(
+            seed=conf.sampler_seed,
+            n_startup_trials=conf.n_startup_trials,
+            n_ei_candidates=conf.n_ei_candidates
+        )
+    elif conf.sampler_type == "random":
+        sampler = RandomSampler(
+            seed=conf.sampler_seed,
+        )
+    elif conf.sampler_type == "quasi-random":
+        sampler = QMCSampler(
+            seed=conf.sampler_seed,
+        )
+    else:
+        raise ValueError(f"Invalid sampler type: {conf.sampler_type}")
 
     # Create study with TPE sampler and pruner
     study = optuna.create_study(
