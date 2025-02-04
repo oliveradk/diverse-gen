@@ -87,3 +87,15 @@ class ExperimentCommandFunction(CommandFunction):
         return metric_val
 
 
+def get_study_args_dict(args: list[str], script_name: str, hparams: dict, n_trials: int, n_startup_trials: int, study_name: str, study_dir: Path):
+    cmd_args = {
+        "args": conf_to_args(args),
+        "script_name": script_name,
+        "hparams": hparams,
+        "n_trials": n_trials,
+        "n_startup_trials": n_startup_trials,
+        "study_name": study_name,
+        "study_dir": study_dir,
+    }
+    return cmd_args
+

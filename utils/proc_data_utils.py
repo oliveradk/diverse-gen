@@ -49,7 +49,7 @@ def get_acc_results(
     for conf in exp_configs:
         try:
             exp_metrics = get_exp_metrics(conf)
-            head_1_epochs = round(conf["epochs"] / 2) if conf["loss_type"] == LossType.DBAT else None
+            head_1_epochs = round(conf["epochs"] / 2) if conf.get("loss_type", None) == LossType.DBAT else None
             max_acc = get_max_acc(exp_metrics, acc_metric, model_selection, head_1_epochs)
             if mix_rates:
                 results[conf.get("mix_rate", 0.0)].append(max_acc)
