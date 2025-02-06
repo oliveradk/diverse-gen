@@ -10,7 +10,7 @@ import numpy as np
 from omegaconf import OmegaConf
 import optuna
 from optuna.trial import Trial
-from optuna.samplers import TPESampler, RandomSampler, QMCSampler
+from optuna.samplers import TPESampler, RandomSampler, QMCSampler, GridSampler
 
 from utils.utils import conf_to_args
 from utils.exp_utils import get_conf_dir
@@ -34,6 +34,7 @@ class Config:
     sampler_type: str = "tpe" # random, quasi-random
     n_startup_trials: int = 10
     n_ei_candidates: int = 100
+    search_space: dict[str, list[float]] = field(default_factory=dict)
     sampler_seed: int = 42
     study_name: str = "hparam_study"
     study_dir: str = f"output/hparam_study/{dt.now().strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -100,6 +101,11 @@ def main():
         )
     elif conf.sampler_type == "quasi-random":
         sampler = QMCSampler(
+            seed=conf.sampler_seed,
+        )
+    elif conf.sampler_type == "grid":
+        sampler = GridSampler(
+            search_space=conf.search_space,
             seed=conf.sampler_seed,
         )
     else:
