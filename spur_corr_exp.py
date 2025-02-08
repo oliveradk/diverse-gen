@@ -358,6 +358,8 @@ if conf.dataset == "toy_grid":
     source_train, source_val, target_train, target_val, target_test = get_toy_grid_datasets(
         target_mix_rate_0_1=conf.mix_rate / 2 if conf.mix_rate is not None else None, 
         target_mix_rate_1_0=conf.mix_rate / 2 if conf.mix_rate is not None else None, 
+        gaussian=True,
+        std=0.01
     )
 elif conf.dataset == "cifar_mnist":
     source_train, source_val, target_train, target_val, target_test = get_cifar_mnist_datasets(
