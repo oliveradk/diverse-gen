@@ -535,14 +535,6 @@ class DivisibleBatchSampler(torch.utils.data.Sampler):
 # In[ ]:
 
 
-# TODO: need to refactor mix rate schedule 
-# I guess just add if else for mix rate or group mix rates
-# 
-
-
-# In[ ]:
-
-
 source_train_loader = DataLoader(
     source_train, batch_size=conf.batch_size, num_workers=conf.num_workers, 
     sampler=DivisibleBatchSampler(len(source_train), conf.batch_size, shuffle=True), 
@@ -623,7 +615,10 @@ elif conf.loss_type in [LossType.TOPK, LossType.EXP, LossType.PROB]:
             if conf.dataset == "multi-nli" and conf.use_group_labels:
                 ood_groups = [(0, 1), (1, 0), (2, 0)]
             else: 
-                ood_groups = [gl for gl in feature_label_ls(classes_per_head)
+                mix_rate_cls_per_head = classes_per_head 
+                if conf.binary:
+                    mix_rate_cls_per_head = [2 for _ in classes_per_head]
+                ood_groups = [gl for gl in feature_label_ls(mix_rate_cls_per_head)
                             if any(gl[0] != gl[i] for i in range(1, len(gl)))]
             group_mix_rates = {group: mix_rate_lower_bound / len(ood_groups) for group in ood_groups}
         return mix_rate, group_mix_rates

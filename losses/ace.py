@@ -120,7 +120,7 @@ class ACELoss(t.nn.Module):
             loss = compute_loss(losses, self.mix_rate, self.mode, virtual_bs)
         # compute loss per group
         else: 
-            loss = 0 
+            loss = t.tensor([0.0], device=self.device) 
             for group, group_mix_rate in self.group_mix_rates.items():
                 losses = group_losses[group]
                 # TODO: ensure one pseudo-label per instance?
