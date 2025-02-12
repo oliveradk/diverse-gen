@@ -247,6 +247,8 @@ conf = Config()
 #     conf.model = "bert"
 #     conf.lr = 1e-5
 #     conf.lr_scheduler = "cosine"
+#     conf.combine_neut_entail = True
+#     conf.contra_no_neg = False
 
 
 
@@ -460,13 +462,23 @@ if conf.binary:
 # In[ ]:
 
 
-# # class distributions
+# def get_count(df, i, j):
+#     try: 
+#         return df.value_counts()[i][j]
+#     except KeyError: 
+#         return 0
 
 # gl_df = pd.DataFrame(target_train.dataset.feature_labels[target_train.indices])
-# ood_counts = gl_df.value_counts()[0][1] + gl_df.value_counts()[1][0]
-# counts_01 = gl_df.value_counts()[0][1]
-# counts_10 = gl_df.value_counts()[1][0]
-# print(f"OOD counts: {ood_counts}, counts_01: {counts_01 / len(gl_df)}, counts_10: {counts_10 / len(gl_df)}")
+
+# counts_00 = get_count(gl_df, 0, 0)
+# counts_01 = get_count(gl_df, 0, 1)
+# counts_10 = get_count(gl_df, 1, 0)
+# counts_11 = get_count(gl_df, 1, 1)
+
+# y0_freq = (counts_00 + counts_01) / (counts_00 + counts_01 + counts_10 + counts_11)
+# a0_freq = (counts_00 + counts_10) / (counts_00 + counts_01 + counts_10 + counts_11)
+
+# print(f"y0_freq: {y0_freq}, a0_freq: {a0_freq}")
 
 
 # In[ ]:
