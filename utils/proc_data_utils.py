@@ -29,7 +29,8 @@ def get_max_acc(
 ):
     if head_1_epochs is not None:
         exp_metrics = {k: v[head_1_epochs:] for k, v in exp_metrics.items()}
-        mask = mask[head_1_epochs:]
+        if mask is not None:
+            mask = mask[head_1_epochs:]
     max_accs = np.array(exp_metrics[f'{acc_metric}_0'])
     if not one_head:
         max_accs = np.maximum(max_accs, np.array(exp_metrics[f'{acc_metric}_1']))
