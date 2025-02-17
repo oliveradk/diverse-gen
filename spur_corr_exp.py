@@ -115,22 +115,22 @@ class Config():
     source_cc: bool = True
     source_val_split: float = 0.2
     target_val_split: float = 0.2
-    mix_rate: Optional[float] = None
+    mix_rate: Optional[float] = 0.5
     shuffle_target: bool = True
     dataset_length: Optional[int] = None
     max_length: int = 128  # for text datasets
     combine_neut_entail: bool = False # for multi-nli
     contra_no_neg: bool = True # for multi-nli
     # topk # TODO: generalize properly configure group mix rates for MLI
-    aggregate_mix_rate: bool = False
-    mix_rate_lower_bound: Optional[float] = 0.1
+    aggregate_mix_rate: bool = True
+    mix_rate_lower_bound: Optional[float] = 0.5
     mix_rate_lower_bound_01: Optional[float] = None
     mix_rate_lower_bound_10: Optional[float] = None
     group_mix_rate_lower_bounds: Optional[dict[str, float]] = None # field(default_factory=lambda: {"0_1": 0.1, "1_0": 0.1})
-    disagree_only: bool = False
-    mix_rate_schedule: Optional[str] = None
-    mix_rate_t0: Optional[int] = None
-    mix_rate_t1: Optional[int] = None
+    disagree_only: bool = True
+    mix_rate_schedule: Optional[str] = "linear"
+    mix_rate_t0: Optional[int] = 0
+    mix_rate_t1: Optional[int] = 5
     mix_rate_interval_frac: Optional[float] = None # for mix rate updates within epoch
     # optimizer 
     lr: float = 1e-4
@@ -871,7 +871,8 @@ try:
         if isinstance(loss_fn, ACELoss):
             if conf.mix_rate_schedule == "linear" and conf.mix_rate_interval_frac is None:
                 cur_mix_rate, cur_group_mix_rates = get_cur_mix_rate(conf, epoch)
-                _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate, group_mix_rate_lb_override=cur_group_mix_rates)
+                mix_rate, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate, group_mix_rate_lb_override=cur_group_mix_rates)
+                loss_fn.mix_rate = mix_rate
                 loss_fn.group_mix_rates = group_mix_rates
         
         for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
@@ -881,8 +882,9 @@ try:
                     if total_steps % int(num_steps * conf.mix_rate_interval_frac) == 0:
                         cur_mix_rate = conf.mix_rate_lower_bound * (total_steps / num_steps) if conf.mix_rate_lower_bound is not None else None
                         cur_group_mix_rates = {group: conf.group_mix_rate_lower_bounds[group] * (total_steps / num_steps) for group in conf.group_mix_rate_lower_bounds.keys()} if conf.group_mix_rate_lower_bounds is not None else None
-                        _, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate, group_mix_rate_lb_override=cur_group_mix_rates)
+                        mix_rate, group_mix_rates = get_mix_rate(conf, mix_rate_lb_override=cur_mix_rate, group_mix_rate_lb_override=cur_group_mix_rates)
                         print("updating mix rate", "steps", total_steps, "mix rate", cur_mix_rate)
+                        loss_fn.mix_rate = mix_rate
                         loss_fn.group_mix_rates = group_mix_rates
             # freeze heads for dbat
             if conf.freeze_heads and epoch == conf.head_1_epochs: 

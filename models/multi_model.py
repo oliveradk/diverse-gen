@@ -8,7 +8,7 @@ from utils.utils import batch_size
 class MultiNetModel(nn.Module): 
     
     def __init__(self, 
-        model_builder: Callable[[], nn.Module], classes_per_head: list[int], feature_dim: int, 
+        model_builder: Callable[[], nn.Module], classes_per_head: list[int], feature_dim: int, dropout_rate: float = 0.0
     ) -> None:
         """
         Multi-head model 
@@ -21,13 +21,16 @@ class MultiNetModel(nn.Module):
         """
         super().__init__()
         self.classes_per_head = classes_per_head
+        self.dropout_rate = dropout_rate
         self.backbones = nn.ModuleList([model_builder() for _ in range(len(classes_per_head))])
         self.heads = nn.ModuleList([nn.Linear(feature_dim, c) for c in classes_per_head])
+        self.dropout = nn.Dropout(dropout_rate)
     
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = batch_size(x)
         features = [backbone(x).view(bs, -1) for backbone in self.backbones]
+        features = [self.dropout(feature) for feature in features]
         outs = [head(feature) for head, feature in zip(self.heads, features)]
         out = torch.cat(outs, dim=-1)
         out = out.view(bs, sum(self.classes_per_head)) # for parity with multi-head backbone

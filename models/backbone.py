@@ -4,7 +4,7 @@ import torch.nn as nn
 from utils.utils import batch_size
 
 class MultiHeadBackbone(nn.Module):
-    def __init__(self, backbone: nn.Module, classes: list[int], feature_dim: int):
+    def __init__(self, backbone: nn.Module, classes: list[int], feature_dim: int, dropout_rate: float = 0.0):
         """
         Multi-head backbone 
 
@@ -17,15 +17,17 @@ class MultiHeadBackbone(nn.Module):
         super(MultiHeadBackbone, self).__init__()
         self.backbone = backbone
         self.classes = classes
-        
+        self.dropout_rate = dropout_rate
         # Create a single matrix for all heads
         self.heads = nn.Linear(feature_dim, sum(classes))
+        self.dropout = nn.Dropout(dropout_rate)
     
     def forward(self, x):
         # Get features from the shared backbone
         bs = batch_size(x)
         features = self.backbone(x).view(bs, -1)
-        
+        # Apply dropout
+        features = self.dropout(features)
         # Apply the heads to the features
         outputs = self.heads(features)
         
