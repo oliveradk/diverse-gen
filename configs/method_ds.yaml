@@ -1,0 +1,57 @@
+TopK_0.1: 
+  toy_grid: 
+    aux_weight: 1.5
+    optimizer: sgd
+  fmnist_mnist: 
+    aux_weight: 1.0
+  cifar_mnist: 
+    aux_weight: 1.5
+  waterbirds: 
+    aux_weight: 8
+  celebA-0: 
+    aux_weight: 2.5
+  multi-nli: 
+    aux_weight: 6
+    mix_rate_interval_frac: 0.25
+TopK_0.5: 
+  toy_grid: 
+    aux_weight: 1.0
+    optimizer: sgd
+  fmnist_mnist: 
+    aux_weight: 1.0
+  cifar_mnist: 
+    aux_weight: 1.0
+  waterbirds: 
+    aux_weight: 3.0
+  celebA-0: 
+    aux_weight: 1.5
+  multi-nli: 
+    aux_weight: 6
+    mix_rate_interval_frac: 0.25
+DivDis: 
+  toy_grid: 
+    aux_weight: 1.0
+    optimizer: adamw
+  fmnist_mnist: 
+    aux_weight: 1.5
+  cifar_mnist: 
+    aux_weight: 1.5
+  waterbirds: 
+    aux_weight: 6
+  celebA-0: 
+    aux_weight: 1.5
+  multi-nli: 
+    aux_weight: 64
+DBAT: 
+  toy_grid: 
+    aux_weight: 1.0
+  fmnist_mnist: 
+    aux_weight: 1.0
+  cifar_mnist: 
+    aux_weight: 1.0
+  waterbirds: 
+    aux_weight: 1.0
+  celebA-0: 
+    aux_weight: 1.0
+  multi-nli: 
+    aux_weight: 0.1

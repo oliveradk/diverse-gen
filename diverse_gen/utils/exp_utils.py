@@ -2,7 +2,7 @@ from typing import Optional
 from pathlib import Path
 from datetime import datetime
 import json
-
+import subprocess
 import numpy as np
 import submitit
 from submitit.helpers import CommandFunction
@@ -60,6 +60,25 @@ def get_conf_dir(conf_name: tuple, exp_dir: Path):
     names = [str(name) for name in names]
     assert isinstance(idx, int), "idx must be an integer"
     return f"{exp_dir}/{'_'.join(names)}/{idx}"
+
+def get_current_commit_hash(short: bool = False) -> Optional[str]:
+    """
+    Get the current Git commit hash.
+    
+    Args:
+        short (bool): If True, returns the shortened commit hash (first 7 characters).
+                     If False, returns the full commit hash.
+    
+    Returns:
+        str: The commit hash, or None if there was an error executing the git command.
+    """
+    try:
+        cmd = ['git', 'rev-parse', 'HEAD']
+        commit_hash = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode('ascii').strip()
+        
+        return commit_hash[:7] if short else commit_hash
+    except subprocess.CalledProcessError:
+        return None
 
 
 class ExperimentCommandFunction(CommandFunction):

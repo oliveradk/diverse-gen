@@ -33,6 +33,7 @@ from diverse_gen.losses.loss_types import LossType
 from diverse_gen.models.backbone import MultiHeadBackbone
 from diverse_gen.utils.utils import batch_size, to_device 
 from diverse_gen.utils.logger import Logger
+from diverse_gen.utils.exp_utils import get_current_commit_hash
 
 
 @dataclass 
@@ -96,7 +97,11 @@ conf = Config(**conf_dict)
 # init exp dir
 exp_dir = conf.exp_dir
 os.makedirs(exp_dir, exist_ok=True)
+# get commit hash 
+commit_hash = get_current_commit_hash()
+conf["commit_hash"] = commit_hash
 # save full config to exp_dir
+
 with open(f"{exp_dir}/config.yaml", "w") as f:
     OmegaConf.save(config=conf, f=f)
 

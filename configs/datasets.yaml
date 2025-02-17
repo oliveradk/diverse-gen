@@ -1,0 +1,41 @@
+toy_grid: 
+  dataset: toy_grid
+  model: toy_model
+  epochs: 100
+  batch_size: 128
+  target_batch_size: 128
+  lr: 1e-3
+fmnist_mnist: 
+  dataset: fmnist_mnist
+  epochs: 5
+  lr: 1e-4
+  batch_size: 32
+  target_batch_size: 64
+cifar_mnist: 
+  dataset: cifar_mnist
+  epochs: 5
+  lr: 1e-4
+  batch_size: 32
+  target_batch_size: 64
+waterbirds: 
+  dataset: waterbirds
+  epochs: 5
+  lr: 1e-4
+  batch_size: 32
+  target_batch_size: 64
+celebA-0: 
+  dataset: celebA-0
+  epochs: 5
+  lr: 1e-4
+  batch_size: 32
+  target_batch_size: 64
+multi-nli: 
+  dataset: multi-nli
+  model: bert
+  epochs: 2
+  lr: 1e-5
+  lr_scheduler: cosine
+  batch_size: 32
+  target_batch_size: 64
+  combine_neut_entail: true
+  contra_no_neg: false
