@@ -745,18 +745,25 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
     with torch.no_grad():
         for x, y, gl in tqdm(loader, desc=stage):
             x, y, gl = to_device(x, y, gl, conf.device)
-            logits = model(x)
-            # print(test_logits.shape)
-            total_samples += logits.size(0)
+            logits, mc_samples = model(x)
+            
+            if isinstance(logits, list):  # MC samples
+                # Average predictions across samples for accuracy computation
+                logits_mean = torch.stack(logits, dim=0).mean(dim=0)
+            else:
+                logits_mean = logits
+                
+            # Use mean logits for accuracy computation
+            total_samples += logits_mean.size(0)
             if use_labels and loss_fn is not None:
-                loss = loss_fn(logits, y, gl)
+                loss = loss_fn(logits_mean, mc_samples)
             elif loss_fn is not None:
-                loss = loss_fn(logits)
-            else: 
+                loss = loss_fn(logits if isinstance(logits, list) else [logits], mc_samples)
+            else:
                 loss = torch.tensor(0.0, device=conf.device)
             if torch.isnan(loss):
                 print(f"Warning: Nan Loss (likely due to batch size and target loss) "
-                f"Batch size: {logits.size(0)}, Loss: {conf.loss_type}")
+                f"Batch size: {logits_mean.size(0)}, Loss: {conf.loss_type}")
             else:
                 losses.append(loss)
 
@@ -765,7 +772,7 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
             for group_label in group_label_ls:
                 group_label_mask = torch.all(gl == torch.tensor(group_label).to(device), dim=1)
                 # print("group label mask", group_label_mask.shape)
-                logits_by_group[group_label] = logits[group_label_mask]
+                logits_by_group[group_label] = logits_mean[group_label_mask]
             # print("group logit shapes", [v.shape for v in logits_by_group.values()])
             
             for group_label, group_logits in logits_by_group.items():
@@ -897,8 +904,8 @@ try:
             
             # target
             target_x, target_y, target_gl = to_device(*target_batch, conf.device)
-            target_logits = net(target_x)
-            target_loss = loss_fn(target_logits)           
+            target_logits, mc_samples = net(target_x)
+            target_loss = loss_fn(target_logits, mc_samples)
             
             logger.add_scalar("train", "target_loss", target_loss.item(), epoch * loader_len + batch_idx)
             logger.add_scalar("train", "weighted_target_loss", conf.aux_weight * target_loss.item(), epoch * loader_len + batch_idx, to_metrics=False, to_tb=True)
@@ -1018,4 +1025,124 @@ try:
             net.train()
 finally:
     logger.flush()
+
+
+# Add MC-Dropout to the model
+class MCDropoutModel(nn.Module):
+    def __init__(self, model, n_samples=10, dropout_rate=0.1):
+        super().__init__()
+        self.model = model
+        self.n_samples = n_samples
+        self.dropout = nn.Dropout(p=dropout_rate)
+        
+    def forward(self, x):
+        if self.training:
+            return self.model(x), None
+        else:
+            # Get main prediction
+            self.eval()
+            with torch.no_grad():
+                main_logits = self.model(x)
+            
+            # Get MC samples
+            self.train()
+            samples = []
+            with torch.no_grad():
+                for _ in range(self.n_samples):
+                    logits = self.model(x)
+                    features = self.dropout(logits)
+                    samples.append(features)
+            self.eval()
+            
+            return main_logits, samples
+
+# Modify model creation
+net = MCDropoutModel(
+    MultiHeadBackbone(model_builder(), classes_per_head, feature_dim),
+    n_samples=10,  # Number of MC samples
+    dropout_rate=0.1  # Dropout rate
+)
+net = net.to(conf.device)
+
+# Modify the training loop to handle MC samples
+# In the training loop, modify the target loss computation:
+target_logits, mc_samples = net(target_x)
+target_loss = loss_fn(target_logits, mc_samples)
+
+# Modify eval function to handle MC samples
+def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluating"): 
+    # ... existing code ...
+    with torch.no_grad():
+        for x, y, gl in tqdm(loader, desc=stage):
+            x, y, gl = to_device(x, y, gl, conf.device)
+            logits, mc_samples = model(x)
+            
+            if isinstance(logits, list):  # MC samples
+                # Average predictions across samples for accuracy computation
+                logits_mean = torch.stack(logits, dim=0).mean(dim=0)
+            else:
+                logits_mean = logits
+                
+            # Use mean logits for accuracy computation
+            total_samples += logits_mean.size(0)
+            if use_labels and loss_fn is not None:
+                loss = loss_fn(logits_mean, mc_samples)
+            elif loss_fn is not None:
+                loss = loss_fn(logits if isinstance(logits, list) else [logits], mc_samples)
+            else:
+                loss = torch.tensor(0.0, device=conf.device)
+            if torch.isnan(loss):
+                print(f"Warning: Nan Loss (likely due to batch size and target loss) "
+                f"Batch size: {logits_mean.size(0)}, Loss: {conf.loss_type}")
+            else:
+                losses.append(loss)
+
+            # parition instances into groups based on group labels 
+            logits_by_group = {}
+            for group_label in group_label_ls:
+                group_label_mask = torch.all(gl == torch.tensor(group_label).to(device), dim=1)
+                # print("group label mask", group_label_mask.shape)
+                logits_by_group[group_label] = logits_mean[group_label_mask]
+            # print("group logit shapes", [v.shape for v in logits_by_group.values()])
+            
+            for group_label, group_logits in logits_by_group.items():
+                num_examples_group = group_logits.size(0)
+                total_samples_by_groups[group_label] += num_examples_group
+                group_labels = torch.tensor(group_label).repeat(num_examples_group, 1).to(device)
+                group_logits_by_head = torch.split(group_logits, classes_per_head, dim=-1)
+                for i in range(conf.heads):
+                    if conf.use_group_labels:
+                        total_corrects_by_groups[group_label][i] += compute_corrects(group_logits_by_head[i], group_labels[:, i], conf.binary)
+                    else:
+                        total_corrects_by_groups[group_label][i] += compute_corrects(group_logits_by_head[i], group_labels[:, 0], conf.binary)
+                        total_corrects_alt_by_groups[group_label][i] += compute_corrects(group_logits_by_head[i], group_labels[:, 1], conf.binary)
+    
+    total_corrects = torch.stack([gl_corrects for gl_corrects in total_corrects_by_groups.values()], dim=0).sum(dim=0)
+    if not conf.use_group_labels:
+        total_corrects_alt = torch.stack([gl_corrects for gl_corrects in total_corrects_alt_by_groups.values()], dim=0).sum(dim=0)
+
+    # average metrics
+    metrics = {}
+    for i in range(conf.heads):
+        metrics[f"acc_{i}"] = (total_corrects[i] / total_samples).item()
+        if not conf.use_group_labels:
+            metrics[f"acc_alt_{i}"] = (total_corrects_alt[i] / total_samples).item()
+    
+    if loss_fn is not None:
+        metrics["loss"] = torch.mean(torch.tensor(losses)).item()
+    # group acc per head
+    for group_label in group_label_ls:
+        for i in range(conf.heads): 
+            metrics[f"acc_{i}_{group_label}"] = (total_corrects_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
+            if not conf.use_group_labels:
+                metrics[f"acc_alt_{i}_{group_label}"] = (total_corrects_alt_by_groups[group_label][i] / total_samples_by_groups[group_label]).item()
+    # worst group acc per head
+    for i in range(conf.heads):
+        metrics[f"worst_acc_{i}"] = min([metrics[f"acc_{i}_{group_label}"] for group_label in group_label_ls])
+
+    # add group counts 
+    for group_label in group_label_ls:
+        metrics[f"count_{group_label}"] = total_samples_by_groups[group_label]
+
+    return metrics
 
