@@ -2,32 +2,44 @@ TopK_0.1:
   toy_grid: 
     aux_weight: 1.5
     optimizer: sgd
+    aggregate_mix_rate: false
   fmnist_mnist: 
     aux_weight: 1.0
+    aggregate_mix_rate: false
   cifar_mnist: 
     aux_weight: 1.5
+    aggregate_mix_rate: false
   waterbirds: 
     aux_weight: 8
+    aggregate_mix_rate: true
   celebA-0: 
     aux_weight: 2.5
+    aggregate_mix_rate: true
   multi-nli: 
     aux_weight: 6
     mix_rate_interval_frac: 0.25
+    aggregate_mix_rate: true
 TopK_0.5: 
   toy_grid: 
     aux_weight: 1.0
     optimizer: sgd
+    aggregate_mix_rate: false
   fmnist_mnist: 
     aux_weight: 1.0
+    aggregate_mix_rate: false
   cifar_mnist: 
     aux_weight: 1.0
+    aggregate_mix_rate: false
   waterbirds: 
     aux_weight: 3.0
+    aggregate_mix_rate: true
   celebA-0: 
     aux_weight: 1.5
+    aggregate_mix_rate: true
   multi-nli: 
     aux_weight: 6
     mix_rate_interval_frac: 0.25
+    aggregate_mix_rate: true
 DivDis: 
   toy_grid: 
     aux_weight: 1.0
