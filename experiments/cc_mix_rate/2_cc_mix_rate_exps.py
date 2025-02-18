@@ -26,8 +26,21 @@ EXP_DIR.mkdir(parents=True, exist_ok=True)
 NODES = 4
 SEEDS = [1, 2, 3]
 MIX_RATES = [0.1, 0.25, 0.5, 0.75, 1.0]
-DATASETS = ["toy_grid", "fmnist_mnist", "cifar_mnist", "waterbirds", "celebA-0", "multi-nli"]
-METHODS = ["TopK_0.1", "TopK_0.5", "DivDis", "DBAT", "ERM"]
+DATASETS = [
+    "toy_grid", 
+    "fmnist_mnist", 
+    "cifar_mnist", 
+    "waterbirds", 
+    "celebA-0", 
+    "multi-nli"
+]
+METHODS = [
+    "TopK_0.1", 
+    "TopK_0.5", 
+    "DivDis", 
+    "DBAT", 
+    "ERM"
+]
 
 configs_dir = Path("configs")
 methods = OmegaConf.load(configs_dir / "methods.yaml")
@@ -37,6 +50,7 @@ method_ds = OmegaConf.load(configs_dir / "method_ds.yaml")
 # filter configs 
 datasets = {k: v for k, v in datasets.items() if k in DATASETS}
 methods = {k: v for k, v in methods.items() if k in METHODS}
+
 # topk configs with no schedule
 no_sched_topk_configs = {}
 for method_name, method_conf in methods.items():
@@ -53,14 +67,15 @@ configs = {
     product(datasets.items(), methods.items(), MIX_RATES, SEEDS)
     if not (method_name == "ERM")
 }
-# # add ERM with mix rate 0.0 
-# for (ds_name, ds), seed in product(datasets.items(), SEEDS):
-#     configs[(ds_name, "ERM", 0.0, seed)] = {**ds, **methods["ERM"], "seed": seed}
+# add ERM with mix rate 0.0 
+for (ds_name, ds), seed in product(datasets.items(), SEEDS):
+    configs[(ds_name, "ERM", 0.0, seed)] = {**ds, **methods["ERM"], "seed": seed}
 # dataset x method adjustments
 for ((ds_name, method_name, mix_rate, seed), conf) in configs.items():
     update = method_ds.get(method_name, {}).get(ds_name, {})
     for k, v in update.items():
         conf[k] = v
+
 # update dbat batch size
 for conf in configs.values():
     if conf["loss_type"] == LossType.DBAT.name: 
