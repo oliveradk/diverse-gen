@@ -5,6 +5,8 @@ toy_grid:
   batch_size: 128
   target_batch_size: 128
   lr: 1e-3
+  weight_decay: 1e-2
+  binary: true
 fmnist_mnist: 
   dataset: fmnist_mnist
   epochs: 5
