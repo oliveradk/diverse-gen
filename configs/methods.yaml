@@ -1,5 +1,5 @@
-# DivDis: 
-#   loss_type: DIVDIS 
+DivDis: 
+  loss_type: DIVDIS 
 TopK_0.1: 
   loss_type: TOPK
   mix_rate_lower_bound: 0.1
@@ -8,10 +8,10 @@ TopK_0.5:
   loss_type: TOPK
   mix_rate_lower_bound: 0.5
   mix_rate_schedule: linear
-# DBAT: 
-#   loss_type: DBAT
-#   shared_backbone: false
-#   freeze_heads: true
-#   binary: true
-# ERM: 
-#   loss_type: ERM
+DBAT: 
+  loss_type: DBAT
+  shared_backbone: false
+  freeze_heads: true
+  binary: true
+ERM: 
+  loss_type: ERM

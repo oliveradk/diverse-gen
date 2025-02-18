@@ -14,29 +14,32 @@ from diverse_gen.utils.exp_utils import get_executor, run_experiments, get_conf_
 
 # exp dir
 SCRIPT_NAME = "exp_scripts/spur_corr_exp.py"
-EXP_DIR = Path("output/cc_mix_rate")
+EXP_DIR = Path("output/incomplete_waterbirds")
 SUB_DIR = None
 if SUB_DIR is None:
     SUB_DIR = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 EXP_DIR = Path(EXP_DIR, SUB_DIR)
 EXP_DIR.mkdir(parents=True, exist_ok=True)
 
+NODES = 4
+
 
 # settings
-NODES = 4
 SEEDS = [1, 2, 3]
-MIX_RATES = [0.1, 0.25, 0.5, 0.75, 1.0]
-DATASETS = ["toy_grid", "fmnist_mnist", "cifar_mnist", "waterbirds", "celebA-0", "multi-nli"]
-METHODS = ["TopK_0.1", "TopK_0.5", "DivDis", "DBAT", "ERM"]
+MIX_RATES = [None]
+
+GLOBAL_CONFIGS = {
+    "source_cc": False,
+}
 
 configs_dir = Path("configs")
 methods = OmegaConf.load(configs_dir / "methods.yaml")
 datasets = OmegaConf.load(configs_dir / "datasets.yaml")
 method_ds = OmegaConf.load(configs_dir / "method_ds.yaml")
 
-# filter configs 
-datasets = {k: v for k, v in datasets.items() if k in DATASETS}
-methods = {k: v for k, v in methods.items() if k in METHODS}
+# filter for waterbirds only 
+datasets = {k: v for k, v in datasets.items() if v["dataset"] == "waterbirds"}
+
 # topk configs with no schedule
 no_sched_topk_configs = {}
 for method_name, method_conf in methods.items():
@@ -71,25 +74,18 @@ for conf in configs.values():
     if conf["loss_type"] == LossType.TOPK.name and conf["mix_rate_schedule"] == "linear":
         conf["mix_rate_t0"] = 0
         conf["mix_rate_t1"] = 5
+
+# set source cc to false 
+for conf in configs.values():
+    conf.update(GLOBAL_CONFIGS)
+
 # set exp dirs
 for conf_name, conf in configs.items():
     conf["exp_dir"] = get_conf_dir(conf_name, EXP_DIR)
 
 
 # run experiments
-high_mem_ds = ["multi-nli", "celebA-0"]
-low_mem_configs = {k: v for k, v in configs.items() if v["dataset"] not in high_mem_ds}
-high_mem_configs = {k: v for k, v in configs.items() if v["dataset"] in high_mem_ds}
-
-# low mem
-low_mem_chunks = np.array_split(list(low_mem_configs.values()), NODES)
-for i, low_mem_chunk in enumerate(low_mem_chunks):
-    # low mem
+chunks = np.array_split(list(configs.values()), NODES)
+for i, chunk in enumerate(chunks):
     executor = get_executor(EXP_DIR, mem_gb=16)
-    jobs = run_experiments(executor, low_mem_chunk.tolist(), SCRIPT_NAME)
-# high mem
-high_mem_chunks = np.array_split(list(high_mem_configs.values()), NODES)
-for i, high_mem_chunk in enumerate(high_mem_chunks):
-    # high mem
-    executor = get_executor(EXP_DIR, mem_gb=32)
-    jobs = run_experiments(executor, high_mem_chunk.tolist(), SCRIPT_NAME)    
+    jobs = run_experiments(executor, chunk.tolist(), SCRIPT_NAME)

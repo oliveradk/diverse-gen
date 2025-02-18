@@ -47,9 +47,9 @@ class Config:
     source_weight: float = 1.0
     aux_weight: float = 1.0
     mix_rate_lower_bound: float = 0.1
-    mix_rate_schedule: Optional[str] = None
-    mix_rate_t0: Optional[int] = None
-    mix_rate_t1: Optional[int] = None
+    mix_rate_schedule: Optional[str] = "linear"
+    mix_rate_t0: Optional[int] = 0
+    mix_rate_t1: Optional[int] = 1
     # model
     model: str = "codegen-350M-mono-measurement_pred-diamonds-seed0"#"pythia-1_4b-deduped-measurement_pred-generated_stories"
     binary: bool = True
