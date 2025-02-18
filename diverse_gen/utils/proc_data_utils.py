@@ -51,8 +51,8 @@ def get_max_acc(
 def get_acc_results(
     exp_configs: Optional[list[dict]] = None,
     exp_dirs: Optional[list[str]] = None,
-    acc_metric: Literal["test_acc", "test_worst_acc", "test_acc_alt"]="test_acc",
-    model_selection: Literal["acc", "loss", "weighted_loss", "repulsion_loss"]="acc",
+    acc_metric: str = "test_acc",
+    model_selection: str = "val_loss",
     verbose: bool=False, 
     mix_rates: bool = True, 
     perf_source_acc: bool = False
