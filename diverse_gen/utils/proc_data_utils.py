@@ -6,7 +6,7 @@ import yaml
 
 import numpy as np
 
-from losses.loss_types import LossType
+from diverse_gen.losses.loss_types import LossType
 
 def get_exp_metrics(conf: Optional[dict] = None, exp_dir: Optional[str] = None):
     if exp_dir is None: 
