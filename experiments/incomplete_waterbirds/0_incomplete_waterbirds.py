@@ -25,12 +25,13 @@ NODES = 4
 
 
 # settings
-SEEDS = [1, 2, 3]
-MIX_RATES = [None]
-
 GLOBAL_CONFIGS = {
     "source_cc": False,
 }
+SEEDS = [1, 2, 3]
+MIX_RATES = [None]
+METHODS = ["TopK_0.1", "TopK_0.5"]
+
 
 configs_dir = Path("configs")
 methods = OmegaConf.load(configs_dir / "methods.yaml")
@@ -38,7 +39,8 @@ datasets = OmegaConf.load(configs_dir / "datasets.yaml")
 method_ds = OmegaConf.load(configs_dir / "method_ds.yaml")
 
 # filter for waterbirds only 
-datasets = {k: v for k, v in datasets.items() if v["dataset"] == "waterbirds"}
+datasets = {k: v for k, v in datasets.items() if k == "waterbirds"}
+methods = {k: v for k, v in methods.items() if k in METHODS}
 
 # topk configs with no schedule
 no_sched_topk_configs = {}
@@ -59,16 +61,19 @@ configs = {
 # # add ERM with mix rate 0.0 
 # for (ds_name, ds), seed in product(datasets.items(), SEEDS):
 #     configs[(ds_name, "ERM", 0.0, seed)] = {**ds, **methods["ERM"], "seed": seed}
+
 # dataset x method adjustments
 for ((ds_name, method_name, mix_rate, seed), conf) in configs.items():
     update = method_ds.get(method_name, {}).get(ds_name, {})
     for k, v in update.items():
         conf[k] = v
+
 # update dbat batch size
 for conf in configs.values():
     if conf["loss_type"] == LossType.DBAT.name: 
         conf["batch_size"] = int(conf["batch_size"] / 2)
         conf["target_batch_size"] = int(conf["target_batch_size"] / 2)
+
 # update topk configs with schedule
 for conf in configs.values():
     if conf["loss_type"] == LossType.TOPK.name and conf["mix_rate_schedule"] == "linear":
