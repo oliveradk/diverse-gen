@@ -31,7 +31,7 @@ class Config:
     script_name: str = "exp_scripts/spur_corr_exp.py"
     hparams: Dict[str, HparamConfig] = field(default_factory=dict)
     n_trials: int = 64
-    sampler_type: str = "tpe" # random, quasi-random
+    sampler_type: str = "quasi-random" # random, quasi-random, tse
     n_startup_trials: int = 10
     n_ei_candidates: int = 100
     search_space: dict[str, list[float]] = field(default_factory=dict)
@@ -42,12 +42,13 @@ class Config:
 def objective(trial: Trial, conf: Config): 
     hparams = {}
     mix_rate_lb_range = conf.hparams["mix_rate_lower_bound"].range
-    mr_lb = trial.suggest_float("mix_rate_lb", mix_rate_lb_range[0], mix_rate_lb_range[1])
-    mr_lb_01 = trial.suggest_float("mix_rate_01", 0.0, mr_lb / 2)
-    mr_lb_10 = mr_lb - mr_lb_01
-    hparams["mix_rate_lower_bound"] = mr_lb
-    hparams["mix_rate_lower_bound_01"] = mr_lb_01
-    hparams["mix_rate_lower_bound_10"] = mr_lb_10
+    mix_rate_lb = trial.suggest_float("mix_rate_lower_bound", mix_rate_lb_range[0], mix_rate_lb_range[1])
+    mr_lb_01_box = trial.suggest_float("mix_rate_lower_bound_01_box", 0.0, 1.0)
+    mix_rate_lb_01 = mr_lb_01_box * (mix_rate_lb / 2)
+    mix_rate_lb_10 = mix_rate_lb - mix_rate_lb_01
+    hparams["mix_rate_lower_bound"] = mix_rate_lb
+    hparams["mix_rate_lower_bound_01"] = mix_rate_lb_01
+    hparams["mix_rate_lower_bound_10"] = mix_rate_lb_10
     
     seed = np.random.randint(0, 1000)
     exp_dir = Path(conf.study_dir) / str(trial.number)
