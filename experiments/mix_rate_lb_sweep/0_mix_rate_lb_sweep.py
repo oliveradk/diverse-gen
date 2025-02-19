@@ -17,8 +17,8 @@ from diverse_gen.utils.run_study import get_storage_path
 N_TRIALS = 250
 N_PARTITIONS = 9
 SAMPLER = "quasi-random"
-STUDY_SCRIPT_PATH = "experiments/mi_rate_lb_sweep/run_mr_lb_study.py"
-
+STUDY_SCRIPT_PATH = "experiments/mix_rate_lb_sweep/run_mr_lb_study.py"
+#%%
 SCRIPT_NAME = "exp_scripts/spur_corr_exp.py"
 EXP_DIR = Path("output/mix_rate_lb_sweep")
 SUB_DIR = None
@@ -60,12 +60,12 @@ for (ds_name, ds_config), mix_rate in product(datasets.items(), MIX_RATES):
         "mix_rate_t0": 0, 
         "mix_rate_t1": ds_config["epochs"]
     }
-
+#%%
 def get_study_name(ds_name, mix_rate):
     return f"{ds_name}_{mix_rate}"
 
 # run experiments
-for (env_name, mix_rate), conf in configs.items(): 
+for (ds_name, mix_rate), conf in configs.items(): 
     study_name = get_study_name(ds_name, mix_rate)
     study_dir = Path(EXP_DIR, study_name)
     study_dir.mkdir(exist_ok=True, parents=True)
