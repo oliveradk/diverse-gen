@@ -27,10 +27,17 @@ NODES = 4
 # settings
 GLOBAL_CONFIGS = {
     "source_cc": False,
+    "use_group_labels": True,
 }
 SEEDS = [1, 2, 3]
 MIX_RATES = [None]
-METHODS = ["TopK_0.1", "TopK_0.5", "ERM", "DBAT", "DivDis"]
+METHODS = [
+    "TopK_0.1", 
+    "TopK_0.5", 
+    # "ERM", 
+    # "DBAT", 
+    # "DivDis"
+]
 
 
 configs_dir = Path("configs")
@@ -41,7 +48,6 @@ method_ds = OmegaConf.load(configs_dir / "method_ds.yaml")
 # filter for waterbirds only 
 datasets = {k: v for k, v in datasets.items() if k == "waterbirds"}
 methods = {k: v for k, v in methods.items() if k in METHODS}
-
 
 # generate exp configs
 configs = {

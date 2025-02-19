@@ -25,13 +25,16 @@ def get_max_acc(
     head_1_epochs: Optional[int] = None, 
     max_model_select: bool = False,
     one_head: bool = False, 
-    mask: Optional[np.ndarray] = None
+    mask: Optional[np.ndarray] = None,
+    head_idx: Optional[int] = None
 ):
+    one_head = one_head or (head_idx is not None)
     if head_1_epochs is not None:
         exp_metrics = {k: v[head_1_epochs:] for k, v in exp_metrics.items()}
         if mask is not None:
             mask = mask[head_1_epochs:]
-    max_accs = np.array(exp_metrics[f'{acc_metric}_0'])
+    head_idx = 0 if head_idx is None else head_idx
+    max_accs = np.array(exp_metrics[f'{acc_metric}_{head_idx}'])
     if not one_head:
         max_accs = np.maximum(max_accs, np.array(exp_metrics[f'{acc_metric}_1']))
     selection_metric = exp_metrics[model_selection]
@@ -55,7 +58,8 @@ def get_acc_results(
     model_selection: str = "val_loss",
     verbose: bool=False, 
     mix_rates: bool = True, 
-    perf_source_acc: bool = False
+    perf_source_acc: bool = False, 
+    head_idx: Optional[int] = None
 ) -> dict | list:
     if exp_configs is None and exp_dirs is not None: 
         exp_configs = []
@@ -86,7 +90,8 @@ def get_acc_results(
                 acc_metric=acc_metric, 
                 model_selection=model_selection, 
                 head_1_epochs=head_1_epochs, 
-                mask=mask
+                mask=mask, 
+                head_idx=head_idx
             )
             if mix_rates:
                 results[conf.get("mix_rate", 0.0)].append(max_acc)
