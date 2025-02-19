@@ -15,6 +15,7 @@ from diverse_gen.utils.exp_utils import get_study_args_dict, get_executor, run_e
 from diverse_gen.utils.run_study import get_storage_path
 #%%
 N_TRIALS = 250
+N_PARTITIONS = 9
 SAMPLER = "quasi-random"
 STUDY_SCRIPT_PATH = "experiments/mi_rate_lb_sweep/run_mr_lb_study.py"
 
@@ -42,8 +43,10 @@ HPARAM_MAP = {
 
 def update_hparam_map(hparam_map, idx):
     new_hparam_map = copy.deepcopy(hparam_map)
-    idx += 1 # start at 0.1
-    new_hparam_map["mix_rate_lower_bound"]["range"] = [idx * 0.1, (idx + 1) * 0.1]
+    old_range = hparam_map["mix_rate_lower_bound"]["range"]
+    interval = (old_range[1] - old_range[0]) / N_PARTITIONS
+    new_range = [old_range[0] + idx * interval, old_range[0] + (idx + 1) * interval]
+    new_hparam_map["mix_rate_lower_bound"]["range"] = new_range
     return new_hparam_map
 
 configs = {}
