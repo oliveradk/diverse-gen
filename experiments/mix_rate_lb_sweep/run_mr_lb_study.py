@@ -43,7 +43,7 @@ def objective(trial: Trial, conf: Config):
     hparams = {}
     mix_rate_lb_range = conf.hparams["mix_rate_lower_bound"].range
     mix_rate_lb = trial.suggest_float("mix_rate_lower_bound", mix_rate_lb_range[0], mix_rate_lb_range[1])
-    mr_lb_01_box = trial.suggest_float("mix_rate_lower_bound_01_box", 0.0, 1.0)
+    mr_lb_01_box = trial.suggest_float("mix_rate_lower_bound_01", 0.0, 1.0)
     mix_rate_lb_01 = mr_lb_01_box * (mix_rate_lb / 2)
     mix_rate_lb_10 = mix_rate_lb - mix_rate_lb_01
     hparams["mix_rate_lower_bound"] = mix_rate_lb
