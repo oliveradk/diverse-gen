@@ -15,7 +15,8 @@ def get_cifar_mnist_datasets(
     target_mix_rate_0_1: int | None = None, 
     target_mix_rate_1_0: int | None = None, 
     transform=None, 
-    pad_sides=False
+    pad_sides=False, 
+    seed: int = 42
 ):
     # set default mix rates
     if source_mix_rate_0_1 is None:
@@ -33,8 +34,16 @@ def get_cifar_mnist_datasets(
     mnist_test = torchvision.datasets.MNIST('./data/mnist/', train=False, download=True, transform=mnist_transform)
     cifar_test = torchvision.datasets.CIFAR10('./data/cifar10/', train=False, download=True, transform=transforms.ToTensor())
 
-    mnist_target, mnist_train, mnist_source_val, mnist_target_val = random_split(mnist_train, [45000, 10000, 2500, 2500], generator=torch.Generator().manual_seed(42))
-    cifar_target, cifar_train, cifar_source_val, cifar_target_val = random_split(cifar_train, [35000, 10000, 2500, 2500], generator=torch.Generator().manual_seed(42))
+    mnist_target, mnist_train, mnist_source_val, mnist_target_val = random_split(
+        mnist_train, 
+        [45000, 10000, 2500, 2500], 
+        generator=torch.Generator().manual_seed(seed)
+    )
+    cifar_target, cifar_train, cifar_source_val, cifar_target_val = random_split(
+        cifar_train, 
+        [35000, 10000, 2500, 2500], 
+        generator=torch.Generator().manual_seed(seed)
+    )
 
     labels_a = [1, 9]
     labels_b = [0, 1]

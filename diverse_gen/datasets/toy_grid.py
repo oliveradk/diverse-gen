@@ -12,7 +12,8 @@ def generate_data(
     train=False, 
     swap_y_meaning=False, 
     gaussian=False,
-    std=1.0
+    std=1.0, 
+    seed=42
 ):
     """
     Generate data with customizable proportions in each quadrant.
@@ -25,6 +26,8 @@ def generate_data(
     :param swap_y_meaning: If True, y is based on x2 > 0. If False, y is based on x1 < 0.
     :return: Tuple of (x, y) where x is a 2D array and y is a 1D array.
     """
+
+    rng = np.random.RandomState(seed)
 
     if train: 
         assert mix_rate is None 
@@ -50,25 +53,25 @@ def generate_data(
     for q, n_points in enumerate(quadrant_points):
         if gaussian:
             if q == 0:  # Q1: x1 > 0 0, x2 > 0
-                x1_q, x2_q = np.random.multivariate_normal(
+                x1_q, x2_q = rng.multivariate_normal(
                     mean=[0.5, 0.5], 
                     cov=[[std, 0], [0, std]], 
                     size=n_points
                 ).T
             elif q == 1:  # Q2: x1 < 0, x2 > 0
-                x1_q, x2_q = np.random.multivariate_normal(
+                x1_q, x2_q = rng.multivariate_normal(
                     mean=[-0.5, 0.5], 
                     cov=[[std, 0], [0, std]], 
                     size=n_points
                 ).T
             elif q == 2:  # Q3: x1 < 0, x2 < 0
-                x1_q, x2_q = np.random.multivariate_normal(
+                x1_q, x2_q = rng.multivariate_normal(
                     mean=[-0.5, -0.5], 
                     cov=[[std, 0], [0, std]], 
                     size=n_points
                 ).T
             else:  # Q4: x1 > 0, x2 < 0
-                x1_q, x2_q = np.random.multivariate_normal(
+                x1_q, x2_q = rng.multivariate_normal(
                     mean=[0.5, -0.5], 
                     cov=[[std, 0], [0, std]], 
                     size=n_points
@@ -77,17 +80,17 @@ def generate_data(
             x2_q = x2_q.reshape(-1, 1)
         else:
             if q == 0:  # Q1: x1 > 0 0, x2 > 0
-                x1_q = np.random.uniform(0, 1, (n_points, 1))
-                x2_q = np.random.uniform(0, 1, (n_points, 1))
+                x1_q = rng.uniform(0, 1, (n_points, 1))
+                x2_q = rng.uniform(0, 1, (n_points, 1))
             elif q == 1:  # Q2: x1 < 0, x2 > 0
-                x1_q = np.random.uniform(-1, 0, (n_points, 1))
-                x2_q = np.random.uniform(0, 1, (n_points, 1))
+                x1_q = rng.uniform(-1, 0, (n_points, 1))
+                x2_q = rng.uniform(0, 1, (n_points, 1))
             elif q == 2:  # Q3: x1 < 0, x2 < 0
-                x1_q = np.random.uniform(-1, 0, (n_points, 1))
-                x2_q = np.random.uniform(-1, 0, (n_points, 1))
+                x1_q = rng.uniform(-1, 0, (n_points, 1))
+                x2_q = rng.uniform(-1, 0, (n_points, 1))
             else:  # Q4: x1 > 0, x2 < 0
-                x1_q = np.random.uniform(0, 1, (n_points, 1))
-                x2_q = np.random.uniform(-1, 0, (n_points, 1))
+                x1_q = rng.uniform(0, 1, (n_points, 1))
+                x2_q = rng.uniform(-1, 0, (n_points, 1))
 
         x1.extend(x1_q)
         x2.extend(x2_q)

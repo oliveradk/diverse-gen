@@ -32,8 +32,16 @@ def get_fmnist_mnist_datasets(
     mnist_test = torchvision.datasets.MNIST('./data/mnist/', train=False, download=True, transform=mnist_transform)
     fmnist_test = torchvision.datasets.FashionMNIST('./data/fashion_mnist/', train=False, download=True, transform=mnist_transform)
     # get splits
-    mnist_target, mnist_train, mnist_source_val, mnist_target_val = random_split(mnist_train, [45000, 10000, 2500, 2500], generator=torch.Generator().manual_seed(seed))
-    fmnist_target, fmnist_train, fmnist_source_val, fmnist_target_val = random_split(fmnist_train, [45000, 10000, 2500, 2500], generator=torch.Generator().manual_seed(seed))
+    mnist_target, mnist_train, mnist_source_val, mnist_target_val = random_split(
+        mnist_train, 
+        [45000, 10000, 2500, 2500], 
+        generator=torch.Generator().manual_seed(seed)
+    )
+    fmnist_target, fmnist_train, fmnist_source_val, fmnist_target_val = random_split(
+        fmnist_train, 
+        [45000, 10000, 2500, 2500], 
+        generator=torch.Generator().manual_seed(seed)
+    )
 
     # generate datasets
     labels_a = [0, 1]

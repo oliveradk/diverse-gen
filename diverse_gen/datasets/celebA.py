@@ -88,6 +88,7 @@ def get_celebA_datasets(
     spur_feat: str='Male',
     inv_spur_feat: bool=False,
     dataset_length: Optional[int]=None,
+    seed: int = 42
 ):
     transform_list = []
     if convert_to_tensor:
@@ -126,7 +127,7 @@ def get_celebA_datasets(
         source_train, source_val = random_split(
             source, 
             [source_train_size, len(source) - source_train_size],
-            generator=torch.Generator().manual_seed(42)
+            generator=torch.Generator().manual_seed(seed)
         )
     else:
         source_train = source 
@@ -136,7 +137,7 @@ def get_celebA_datasets(
         target_train, target_val = random_split(
             target, 
             [target_train_size, len(target) - target_train_size],
-            generator=torch.Generator().manual_seed(42)
+            generator=torch.Generator().manual_seed(seed)
         )
     else:
         target_train = target 

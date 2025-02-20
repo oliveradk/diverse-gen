@@ -108,7 +108,8 @@ def get_multi_nli_datasets(
     max_length=128,
     dataset_length=None,
     combine_neut_entail=False,
-    contra_no_neg=True
+    contra_no_neg=True, 
+    seed: int = 42
 ):
     assert tokenizer is not None, "Tokenizer is required"
     
@@ -166,7 +167,7 @@ def get_multi_nli_datasets(
         source_train, source_val = random_split(
             source, 
             [source_train_size, len(source) - source_train_size],
-            generator=torch.Generator().manual_seed(42)
+            generator=torch.Generator().manual_seed(seed)
         )
     else:
         source_train = source 
@@ -176,7 +177,7 @@ def get_multi_nli_datasets(
         target_train, target_val = random_split(
             target, 
             [target_train_size, len(target) - target_train_size], 
-            generator=torch.Generator().manual_seed(42)
+            generator=torch.Generator().manual_seed(seed)
         )
     else:
         target_train = target 

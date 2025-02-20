@@ -62,6 +62,7 @@ def get_waterbirds_datasets(
     val_split: float = 0.2, 
     target_val_split: float = 0.0, 
     dataset_length: Optional[int]=None,
+    seed: int = 42
 ):
     transform_list = []
     if convert_to_tensor:
@@ -97,7 +98,7 @@ def get_waterbirds_datasets(
         source_train, source_val = random_split(
             source, 
             [source_train_size, len(source) - source_train_size],
-            generator=torch.Generator().manual_seed(42)
+            generator=torch.Generator().manual_seed(seed)
         )
     else:
         source_train = source 
@@ -107,7 +108,7 @@ def get_waterbirds_datasets(
         target_train, target_val = random_split(
             target, 
             [target_train_size, len(target) - target_train_size], 
-            generator=torch.Generator().manual_seed(42)
+            generator=torch.Generator().manual_seed(seed)
         )
     else:
         target_train = target 
