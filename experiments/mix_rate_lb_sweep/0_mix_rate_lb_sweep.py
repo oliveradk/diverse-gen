@@ -14,9 +14,9 @@ from diverse_gen.losses.loss_types import LossType
 from diverse_gen.utils.exp_utils import get_study_args_dict, get_executor, run_experiments
 from diverse_gen.utils.run_study import get_storage_path
 #%%
-N_TRIALS = 250
-N_PARTITIONS = 9
-SAMPLER = "quasi-random"
+N_TRIALS = 200
+N_PARTITIONS = 1 # no longer using multiple partitions
+SAMPLER = "grid"
 STUDY_SCRIPT_PATH = "experiments/mix_rate_lb_sweep/run_mr_lb_study.py"
 #%%
 SCRIPT_NAME = "exp_scripts/spur_corr_exp.py"
@@ -38,16 +38,16 @@ datasets = {k: v for k, v in datasets.items() if k in DATASETS}
 method_ds = {k: v for k, v in method_ds.items() if k == "TopK_0.5"} # use topk 0.5 defaults
 #%%
 HPARAM_MAP = {
-    "mix_rate_lower_bound": {"type": "float", "range": [0.1, 1], "log": False},
+    "mix_rate_lower_bound": {"type": "float", "range": [0.0, 1.0], "log": False},
+}
+search_space = {
+    "mix_rate_lower_bound": np.linspace(0.0, 1.0, 20).tolist(), 
+    "mix_rate_lower_bound_01": np.linspace(0.0, 1.0, 10).tolist(), 
 }
 
-def update_hparam_map(hparam_map, idx):
-    new_hparam_map = copy.deepcopy(hparam_map)
-    old_range = hparam_map["mix_rate_lower_bound"]["range"]
-    interval = (old_range[1] - old_range[0]) / N_PARTITIONS
-    new_range = [old_range[0] + idx * interval, old_range[0] + (idx + 1) * interval]
-    new_hparam_map["mix_rate_lower_bound"]["range"] = new_range
-    return new_hparam_map
+# set aggregate mix rate to false for all datasets 
+for k, v in datasets.items():
+    v["aggregate_mix_rate"] = False
 
 configs = {}
 for (ds_name, ds_config), mix_rate in product(datasets.items(), MIX_RATES):
@@ -80,12 +80,13 @@ for (ds_name, mix_rate), conf in configs.items():
             **get_study_args_dict(
                 conf, 
                 SCRIPT_NAME, 
-                update_hparam_map(HPARAM_MAP, i), 
+                HPARAM_MAP, 
                 n_trials_per_node, 
                 0, 
                 study_name, 
                 study_dir
             ), 
+            "search_space": search_space, 
             "sampler_seed": i, 
             "sampler_type": SAMPLER
         } for i in range(N_PARTITIONS)

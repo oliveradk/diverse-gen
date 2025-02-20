@@ -31,7 +31,7 @@ class Config:
     script_name: str = "exp_scripts/spur_corr_exp.py"
     hparams: Dict[str, HparamConfig] = field(default_factory=dict)
     n_trials: int = 64
-    sampler_type: str = "quasi-random" # random, quasi-random, tse
+    sampler_type: str = "quasi-random" # random, quasi-random, tse, grid
     n_startup_trials: int = 10
     n_ei_candidates: int = 100
     search_space: dict[str, list[float]] = field(default_factory=dict)
@@ -56,6 +56,7 @@ def objective(trial: Trial, conf: Config):
     trial_conf = {
         "exp_dir": exp_dir,
         "seed": seed,
+        "save_preds": True,
         **hparams,
     }
 
