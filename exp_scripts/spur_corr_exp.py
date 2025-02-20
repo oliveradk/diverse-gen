@@ -91,6 +91,7 @@ class Config():
     num_workers: int = 4
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    save_probs: bool = False
     plot_activations: bool = False
 
 def post_init(conf: Config, overrides: list[str]=[]):
@@ -296,6 +297,7 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
     
     # loss 
     losses = []
+    probs = []
 
     # accuracy 
     total_corrects_by_groups = {
@@ -316,7 +318,14 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
         for x, y, gl in tqdm(loader, desc=stage):
             x, y, gl = to_device(x, y, gl, conf.device)
             logits = model(x)
-            # print(test_logits.shape)
+            logits_by_head = torch.split(logits, classes_per_head, dim=-1)
+            batch_probs = torch.concat(
+                [F.softmax(logits_by_head[i], dim=-1) if not conf.binary else F.sigmoid(logits_by_head[i]) 
+                 for i in range(conf.heads)], 
+                dim=1
+            )
+            assert batch_probs.shape == (logits.shape[0], sum(classes_per_head)), f"Batch probs shape: {batch_probs.shape}, logits shape: {logits.shape}, classes_per_head: {classes_per_head}"
+            probs.append(batch_probs)
             total_samples += logits.size(0)
             if use_labels and loss_fn is not None:
                 loss = loss_fn(logits, y, gl)
@@ -374,8 +383,11 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
     # add group counts 
     for group_label in group_label_ls:
         metrics[f"count_{group_label}"] = total_samples_by_groups[group_label]
+    
+    # concat probs 
+    probs = torch.concat(probs, dim=0)
 
-    return metrics
+    return metrics, probs
 
 def train(
     conf: Config,
@@ -449,7 +461,7 @@ def train(
             total_val_weighted_loss = 0.0
             if len(source_val) > 0:
                 src_loss_sum_fn = lambda x, y, gl: sum(src_loss_fn(x, y, gl))
-                source_val_metrics = eval(net, source_val_loader, conf.device, src_loss_sum_fn, use_labels=True, stage="Source Val")
+                source_val_metrics, source_val_probs = eval(net, source_val_loader, conf.device, src_loss_sum_fn, use_labels=True, stage="Source Val")
                 for k, v in source_val_metrics.items():
                     if 'count' not in k:
                         logger.add_scalar("val", f"source_{k}", v, epoch)
@@ -458,7 +470,7 @@ def train(
             # target
             weighted_target_val_loss = 0.0
             if len(target_val) > 0:  
-                target_val_metrics = eval(net, target_val_loader, conf.device, valid_loss_fn, use_labels=False, stage="Target Val")
+                target_val_metrics, target_val_probs = eval(net, target_val_loader, conf.device, valid_loss_fn, use_labels=False, stage="Target Val")
                 for k, v in target_val_metrics.items():
                     if 'count' not in k:
                         logger.add_scalar("val", f"target_{k}", v, epoch)
@@ -471,10 +483,17 @@ def train(
             logger.add_scalar("val", "weighted_loss", total_val_weighted_loss, epoch)
 
             ### Test
-            target_test_metrics = eval(net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test")
+            target_test_metrics, target_test_probs = eval(net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test")
             for k, v in target_test_metrics.items():
                 if 'count' not in k:
                     logger.add_scalar("test", k, v, epoch)
+            
+            # save probs
+            if conf.save_probs:
+                os.makedirs(f"{exp_dir}/probs", exist_ok=True)
+                torch.save(source_val_probs.to("cpu"), f"{exp_dir}/probs/source_val_probs_{epoch}.pt")
+                torch.save(target_val_probs.to("cpu"), f"{exp_dir}/probs/target_val_probs_{epoch}.pt")
+                torch.save(target_test_probs.to("cpu"), f"{exp_dir}/probs/target_test_probs_{epoch}.pt")
             
             ### Print Results
             print(f"Epoch {epoch + 1} Eval Results:")
