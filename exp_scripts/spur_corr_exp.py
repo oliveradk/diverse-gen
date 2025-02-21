@@ -58,7 +58,7 @@ class Config():
     aux_weight: float = 1.0
     use_group_labels: bool = False
     freeze_heads: bool = False
-    head_1_epochs: int = 5
+    head_1_epochs: int = 2
     # dataset
     source_cc: bool = True
     source_val_split: float = 0.2
@@ -502,7 +502,9 @@ def train(
                 print(f"Source validation loss: {logger.metrics['val_source_loss'][-1]:.4f}")
             if len(target_val) > 0:
                 print(f"Target validation loss {logger.metrics['val_target_loss'][-1]:.4f}")
+                print(f"Target validation weighted loss {logger.metrics['val_target_weighted_loss'][-1]:.4f}")
             print(f"Validation loss: {logger.metrics['val_loss'][-1]:.4f}")
+            print(f"Validation weighted loss: {logger.metrics['val_weighted_loss'][-1]:.4f}")
             print("\n=== Test Accuracies ===")
             # Overall accuracy for each head
             print("\nOverall Accuracies:")
