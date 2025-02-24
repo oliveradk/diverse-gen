@@ -12,7 +12,7 @@ def generate_data(
     train=False, 
     swap_y_meaning=False, 
     gaussian=False,
-    std=1.0, 
+    std=0.01, 
     seed=42
 ):
     """
