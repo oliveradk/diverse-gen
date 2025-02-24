@@ -56,7 +56,7 @@ def objective(trial: Trial, conf: Config):
     trial_conf = {
         "exp_dir": exp_dir,
         "seed": seed,
-        "save_preds": True,
+        "save_probs": True,
         **hparams,
     }
 
