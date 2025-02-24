@@ -89,6 +89,7 @@ class Config():
     num_cycles: float = 0.5
     frac_warmup: float = 0.05
     # misc
+    train: bool = True
     num_workers: int = 4
     device: str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -396,6 +397,47 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
 
     return metrics, probs
 
+def eval_all(
+    net: nn.Module, 
+    source_val_loader: DataLoader, 
+    target_val_loader: DataLoader, 
+    target_test_loader: DataLoader, 
+    epoch: int, 
+    valid_loss_fn: Callable, 
+    logger: Logger, 
+):
+    # source
+    total_val_loss = 0.0
+    total_val_weighted_loss = 0.0
+    if len(source_val) > 0:
+        src_loss_sum_fn = lambda x, y, gl: sum(src_loss_fn(x, y, gl))
+        source_val_metrics, source_val_probs = eval(net, source_val_loader, conf.device, src_loss_sum_fn, use_labels=True, stage="Source Val")
+        for k, v in source_val_metrics.items():
+            if 'count' not in k:
+                logger.add_scalar("val", f"source_{k}", v, epoch)
+        total_val_loss += source_val_metrics["loss"]
+        total_val_weighted_loss += total_val_loss
+    # target
+    weighted_target_val_loss = 0.0
+    if len(target_val) > 0:  
+        target_val_metrics, target_val_probs = eval(net, target_val_loader, conf.device, valid_loss_fn, use_labels=False, stage="Target Val")
+        for k, v in target_val_metrics.items():
+            if 'count' not in k:
+                logger.add_scalar("val", f"target_{k}", v, epoch)
+        weighted_target_val_loss = target_val_metrics["loss"] * conf.aux_weight
+        logger.add_scalar("val", "target_weighted_loss", weighted_target_val_loss, epoch)
+        total_val_loss += target_val_metrics["loss"]    
+        total_val_weighted_loss += weighted_target_val_loss
+    # total val
+    logger.add_scalar("val", "loss", total_val_loss, epoch)
+    logger.add_scalar("val", "weighted_loss", total_val_weighted_loss, epoch)
+
+    ### Test
+    target_test_metrics, target_test_probs = eval(net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test")
+    for k, v in target_test_metrics.items():
+        if 'count' not in k:
+            logger.add_scalar("test", k, v, epoch)
+
 def train(
     conf: Config,
     net: nn.Module, 
@@ -462,46 +504,15 @@ def train(
         # eval
         if (epoch + 1) % 1 == 0:
             net.eval()
-            ### Validation 
-            # source
-            total_val_loss = 0.0
-            total_val_weighted_loss = 0.0
-            if len(source_val) > 0:
-                src_loss_sum_fn = lambda x, y, gl: sum(src_loss_fn(x, y, gl))
-                source_val_metrics, source_val_probs = eval(net, source_val_loader, conf.device, src_loss_sum_fn, use_labels=True, stage="Source Val")
-                for k, v in source_val_metrics.items():
-                    if 'count' not in k:
-                        logger.add_scalar("val", f"source_{k}", v, epoch)
-                total_val_loss += source_val_metrics["loss"]
-                total_val_weighted_loss += total_val_loss
-            # target
-            weighted_target_val_loss = 0.0
-            if len(target_val) > 0:  
-                target_val_metrics, target_val_probs = eval(net, target_val_loader, conf.device, valid_loss_fn, use_labels=False, stage="Target Val")
-                for k, v in target_val_metrics.items():
-                    if 'count' not in k:
-                        logger.add_scalar("val", f"target_{k}", v, epoch)
-                weighted_target_val_loss = target_val_metrics["loss"] * conf.aux_weight
-                logger.add_scalar("val", "target_weighted_loss", weighted_target_val_loss, epoch)
-                total_val_loss += target_val_metrics["loss"]    
-                total_val_weighted_loss += weighted_target_val_loss
-            # total val
-            logger.add_scalar("val", "loss", total_val_loss, epoch)
-            logger.add_scalar("val", "weighted_loss", total_val_weighted_loss, epoch)
-
-            ### Test
-            target_test_metrics, target_test_probs = eval(net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test")
-            for k, v in target_test_metrics.items():
-                if 'count' not in k:
-                    logger.add_scalar("test", k, v, epoch)
-            
-            # save probs
-            if conf.save_probs:
-                os.makedirs(f"{exp_dir}/probs", exist_ok=True)
-                torch.save(source_val_probs.to("cpu"), f"{exp_dir}/probs/source_val_probs_{epoch}.pt")
-                torch.save(target_val_probs.to("cpu"), f"{exp_dir}/probs/target_val_probs_{epoch}.pt")
-                torch.save(target_test_probs.to("cpu"), f"{exp_dir}/probs/target_test_probs_{epoch}.pt")
-            
+            eval_all(
+                net=net, 
+                source_val_loader=source_val_loader, 
+                target_val_loader=target_val_loader, 
+                target_test_loader=target_test_loader, 
+                epoch=epoch, 
+                valid_loss_fn=valid_loss_fn, 
+                logger=logger
+            )
             ### Print Results
             print(f"Epoch {epoch + 1} Eval Results:")
             # print source acc 
@@ -528,30 +539,43 @@ def train(
             # Group-wise accuracies
             print("\nGroup-wise Accuracies:")
             for group_label in feature_label_ls(classes_per_feat):
-                print(f"\nGroup {group_label}, count: {target_test_metrics[f'count_{group_label}']}:")
+                print(f"\nGroup {group_label}, count: {logger.metrics[f'test_count_{group_label}']}:")
                 for i in range(conf.heads):
                     print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}" + \
                           (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}" if not conf.use_group_labels else ""))
             net.train()
 
 
+
 logger = Logger(exp_dir)
 try: 
-    train(
-        conf=conf,
-        net=net, 
-        source_train_loader=source_train_loader, 
-        target_train_loader=target_train_loader, 
-        source_val_loader=source_val_loader, 
-        target_val_loader=target_val_loader, 
-        target_test_loader=target_test_loader, 
-        src_loss_fn=src_loss_fn, 
-        loss_fn=loss_fn, 
-        valid_loss_fn=valid_loss_fn, 
-        mix_rate_scheduler=(mix_rate_scheduler if conf.loss_type == LossType.TOPK else None), 
-        classes_per_feat=classes_per_feat, 
-        logger=logger
-    )
+    if conf.train:
+        train(
+            conf=conf,
+            net=net, 
+            source_train_loader=source_train_loader, 
+            target_train_loader=target_train_loader, 
+            source_val_loader=source_val_loader, 
+            target_val_loader=target_val_loader, 
+            target_test_loader=target_test_loader, 
+            src_loss_fn=src_loss_fn, 
+            loss_fn=loss_fn, 
+            valid_loss_fn=valid_loss_fn, 
+            mix_rate_scheduler=(mix_rate_scheduler if conf.loss_type == LossType.TOPK else None), 
+            classes_per_feat=classes_per_feat, 
+            logger=logger
+        )
+    else: 
+        net.eval()
+        eval_all(
+            net=net, 
+            source_val_loader=source_val_loader, 
+            target_val_loader=target_val_loader, 
+            target_test_loader=target_test_loader, 
+            valid_loss_fn=valid_loss_fn, 
+            epoch=0, 
+            logger=logger
+        )
 finally:
     logger.flush()
 
