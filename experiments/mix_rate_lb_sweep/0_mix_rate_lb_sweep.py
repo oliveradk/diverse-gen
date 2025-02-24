@@ -29,11 +29,11 @@ EXP_DIR.mkdir(exist_ok=True, parents=True)
 MIX_RATES = [0.1, 0.25, 0.5, 0.75, 1.0]
 DATASETS = [
     "toy_grid", 
-    "fmnist_mnist", 
-    "cifar_mnist", 
-    "waterbirds", 
+    # "fmnist_mnist", 
+    # "cifar_mnist", 
+    # "waterbirds", 
     "celebA-0", 
-    "multi-nli"
+    # "multi-nli"
 ]
 
 METHODS = ["TopK_0.5"]
@@ -68,6 +68,7 @@ configs = {
     (ds_name, method_name, mix_rate): {
         "--config_file": f"{method_name}_{ds_name}", 
         "mix_rate": mix_rate, 
+        "aux_weight": 1.0, 
     } 
     for (ds_name, method_name, mix_rate) in 
     product(DATASETS, METHODS, MIX_RATES)
