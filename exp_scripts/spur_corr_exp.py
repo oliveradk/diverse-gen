@@ -10,6 +10,7 @@ from dataclasses import field
 import sys 
 
 from omegaconf import OmegaConf
+from hydra import compose, initialize
 import numpy as np
 import torch
 import torch.nn as nn
@@ -94,10 +95,7 @@ class Config():
     save_probs: bool = False
     plot_activations: bool = False
 
-def post_init(conf: Config, overrides: list[str]=[]):
-    if conf.freeze_heads and "head_1_epochs" not in overrides:
-        conf.head_1_epochs = round(conf.epochs / 2)
-    
+def post_init(conf: Config):
     # set group mix rate lower bounds based on 01 10 (kinda hacky for doing hparam searches)
     if conf.mix_rate_lower_bound_01 is not None or conf.mix_rate_lower_bound_10 is not None:
         assert conf.group_mix_rate_lower_bounds is None
@@ -111,11 +109,20 @@ def post_init(conf: Config, overrides: list[str]=[]):
 
 
 # init config and get overrides
+OmegaConf.register_new_resolver("div", lambda x, y: x // y)
 conf = Config()
-overrride_keys = []
-overrides = OmegaConf.from_cli(sys.argv[1:])
-overrride_keys = overrides.keys()
-conf_dict = OmegaConf.merge(OmegaConf.structured(conf), overrides)
+file_overrides = {}
+print(sys.argv)
+if sys.argv[1] == "--config_file": 
+    config_path = sys.argv[2]
+    with initialize(config_path=f"../configs/spur_corr", version_base=None):
+        file_overrides = compose(config_name=config_path)
+    cmd_line_args = sys.argv[3:] if len(sys.argv) > 3 else []
+else: 
+    cmd_line_args = sys.argv[1:]
+cmd_line_overrides = OmegaConf.from_cli(cmd_line_args)
+conf_dict = OmegaConf.merge(OmegaConf.structured(conf), file_overrides, cmd_line_overrides)
+OmegaConf.resolve(conf_dict)
 conf = Config(**conf_dict)
 exp_dir = conf.exp_dir
 os.makedirs(exp_dir, exist_ok=True)
@@ -123,7 +130,7 @@ os.makedirs(exp_dir, exist_ok=True)
 # save full config to exp_dir
 with open(f"{exp_dir}/config.yaml", "w") as f:
     OmegaConf.save(config=conf, f=f)
-post_init(conf, overrride_keys)
+post_init(conf)
 
 # save commit hash
 with open(f"{exp_dir}/commit_hash.txt", "w") as f:
@@ -497,6 +504,9 @@ def train(
             
             ### Print Results
             print(f"Epoch {epoch + 1} Eval Results:")
+            # print source acc 
+            for i in range(conf.heads):
+                print(f"Source validation acc {i}: {logger.metrics[f'val_source_acc_{i}'][-1]:.4f}")
             # print validation losses
             if len(source_val) > 0:
                 print(f"Source validation loss: {logger.metrics['val_source_loss'][-1]:.4f}")

@@ -1,0 +1,6 @@
+defaults:
+  - /dataset/cifar_mnist@_here_
+  - /method/DivDis@_here_
+  - _self_
+
+aux_weight: 1.5

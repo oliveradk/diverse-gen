@@ -1,0 +1,5 @@
+dataset: fmnist_mnist
+epochs: 5
+lr: 1e-4
+batch_size: 32
+target_batch_size: 64

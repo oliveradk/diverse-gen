@@ -1,0 +1,5 @@
+defaults:
+  - /dataset/fmnist_mnist@_here_
+  - /method/ERM@_here_
+  - _self_
+

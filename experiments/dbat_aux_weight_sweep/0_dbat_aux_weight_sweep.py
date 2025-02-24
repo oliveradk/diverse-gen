@@ -31,9 +31,7 @@ MIX_RATES = [0.1, 0.25, 0.5, 0.75, 1.0]
 DATASETS = ["toy_grid", "fmnist_mnist", "cifar_mnist", "waterbirds"]
 METHODS = ["DBAT"]
 
-config_dir = Path("configs")
-datasets = OmegaConf.load(config_dir / "datasets.yaml")
-methods = OmegaConf.load(config_dir / "methods.yaml")
+
 #%%
 HPARAM_MAP = {
     "aux_weight": {"type": "float", "range": [1e-6, 1.], "log": True},
@@ -52,20 +50,14 @@ def update_hparam_map(hparam_map, idx):
             hparam_map[k]["range"] = new_range
     return hparam_map
 
-configs = {}
-for ds_name, method_name, mix_rate in product(DATASETS, METHODS, MIX_RATES):
-    configs[(ds_name, method_name, mix_rate)] = {
-        **datasets[ds_name], 
-        **methods[method_name],
-        "mix_rate": mix_rate,
-    }
-
-# update batch sizes and epochs
-for conf in configs.values():
-    if conf["loss_type"] == LossType.DBAT.name: 
-        conf["batch_size"] = int(conf["batch_size"] / 2)
-        conf["target_batch_size"] = int(conf["target_batch_size"] / 2)
-        conf["head_1_epochs"] = int(conf["epochs"] / 2)
+configs = {
+    (ds_name, method_name, mix_rate): {
+        "--config_file": f"{method_name}_{ds_name}", 
+        "mix_rate": mix_rate, 
+    } 
+    for (ds_name, method_name, mix_rate) in 
+    product(DATASETS, METHODS, MIX_RATES)
+}
 #%%
 def get_study_name(ds_name, mix_rate):
     return f"{ds_name}_{mix_rate}"

@@ -14,10 +14,10 @@ from diverse_gen.losses.loss_types import LossType
 from diverse_gen.utils.exp_utils import get_study_args_dict, get_executor, run_experiments
 from diverse_gen.utils.run_study import get_storage_path
 #%%
-N_TRIALS = 200
-N_PARTITIONS = 1 # no longer using multiple partitions
-SAMPLER = "grid"
-STUDY_SCRIPT_PATH = "experiments/mix_rate_lb_sweep/run_mr_lb_study.py"
+N_TRIALS = 32
+N_PARTITIONS = 8 # no longer using multiple partitions
+SAMPLER = "quasi-random"
+STUDY_SCRIPT_PATH = "diverse_gen/utils/run_study.py"
 #%%
 SCRIPT_NAME = "exp_scripts/spur_corr_exp.py"
 EXP_DIR = Path("output/mix_rate_lb_sweep")
@@ -29,17 +29,26 @@ EXP_DIR.mkdir(exist_ok=True, parents=True)
 #%%
 MIX_RATES = [0.1, 0.25, 0.5, 0.75, 1.0]
 DATASETS = ["toy_grid", "fmnist_mnist", "cifar_mnist", "waterbirds"]
-METHODS = ["TopK_0.5"]
+METHODS = ["DivDis"]
 #%%
 HPARAM_MAP = {
-    "mix_rate_lower_bound": {"type": "float", "range": [0.0, 1.0], "log": False},
-}
-search_space = {
-    "mix_rate_lower_bound": np.linspace(0.0, 1.0, 20).tolist(), 
-    "mix_rate_lower_bound_01": np.linspace(0.0, 1.0, 10).tolist(), 
+    "aux_weight": {"type": "float", "range": [1e-1, 1e3], "log": True},
 }
 
-# generate exp configs
+def update_hparam_map(hparam_map, idx):
+    hparam_map = copy.deepcopy(hparam_map)
+    for k, v in hparam_map.items():
+        if v["type"] == "float":
+            if v["log"]:
+                inc_size = np.log10(v["range"][1] / v["range"][0]) / N_PARTITIONS
+                new_range = [v["range"][0] * 10**(idx * inc_size), v["range"][0] * 10**((idx + 1) * inc_size)]
+            else:
+                inc_size = (v["range"][1] - v["range"][0]) / N_PARTITIONS
+                new_range = [v["range"][0] + idx * inc_size, v["range"][0] + (idx + 1) * inc_size]
+            hparam_map[k]["range"] = new_range
+    return hparam_map
+
+
 configs = {
     (ds_name, method_name, mix_rate): {
         "--config_file": f"{method_name}_{ds_name}", 
@@ -48,11 +57,6 @@ configs = {
     for (ds_name, method_name, mix_rate) in 
     product(DATASETS, METHODS, MIX_RATES)
 }
-
-# set aggregate mix rate to false for all datasets 
-for conf in configs.values():
-    conf["aggregate_mix_rate"] = False
-
 #%%
 def get_study_name(ds_name, mix_rate):
     return f"{ds_name}_{mix_rate}"
@@ -79,7 +83,6 @@ for (ds_name, mix_rate), conf in configs.items():
                 study_name, 
                 study_dir
             ), 
-            "search_space": search_space, 
             "sampler_seed": i, 
             "sampler_type": SAMPLER
         } for i in range(N_PARTITIONS)

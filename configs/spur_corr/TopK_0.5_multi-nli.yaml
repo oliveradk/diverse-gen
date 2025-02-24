@@ -1,0 +1,8 @@
+defaults:
+  - /dataset/multi-nli@_here_
+  - /method/TopK_0.5@_here_
+  - _self_
+
+aux_weight: 6
+aggregate_mix_rate: True
+mix_rate_interval_frac: 0.25

@@ -1,0 +1,8 @@
+defaults:
+  - /dataset/celebA-0@_here_
+  - /method/DBAT@_here_
+  - _self_
+
+aux_weight: 0.01
+batch_size: 16
+target_batch_size: 32

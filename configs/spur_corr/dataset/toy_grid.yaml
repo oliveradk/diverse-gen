@@ -1,0 +1,8 @@
+dataset: toy_grid
+model: toy_model
+epochs: 100
+batch_size: 32
+target_batch_size: 128
+lr: 1e-3
+weight_decay: 1e-2
+binary: true

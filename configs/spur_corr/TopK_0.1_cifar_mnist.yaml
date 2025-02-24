@@ -1,0 +1,7 @@
+defaults:
+  - /dataset/cifar_mnist@_here_
+  - /method/TopK_0.1@_here_
+  - _self_
+
+aux_weight: 1.5
+aggregate_mix_rate: False

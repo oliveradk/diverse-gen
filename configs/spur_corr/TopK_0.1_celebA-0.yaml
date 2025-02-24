@@ -1,0 +1,7 @@
+defaults:
+  - /dataset/celebA-0@_here_
+  - /method/TopK_0.1@_here_
+  - _self_
+
+aux_weight: 2.5
+aggregate_mix_rate: True

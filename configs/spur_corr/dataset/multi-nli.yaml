@@ -1,0 +1,9 @@
+dataset: multi-nli
+model: bert
+epochs: 2
+lr: 1e-5
+lr_scheduler: cosine
+batch_size: 32
+target_batch_size: 64
+combine_neut_entail: true
+contra_no_neg: false

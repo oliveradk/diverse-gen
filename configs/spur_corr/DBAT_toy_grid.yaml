@@ -1,0 +1,8 @@
+defaults:
+  - /dataset/toy_grid@_here_
+  - /method/DBAT@_here_
+  - _self_
+
+aux_weight: 0.4
+batch_size: 16
+target_batch_size: 64

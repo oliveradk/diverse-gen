@@ -10,6 +10,10 @@ Input = Union[dict[str, torch.Tensor], torch.Tensor]
 
 def conf_to_args(conf: dict):
     args = []
+    config_file = conf.pop("--config_file", None)
+    if config_file is not None:
+        args.append("--config_file")
+        args.append(config_file)
     for key, value in conf.items():
         # check if value is an enum 
         if isinstance(value, Enum):

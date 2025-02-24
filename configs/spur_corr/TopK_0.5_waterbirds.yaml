@@ -1,0 +1,7 @@
+defaults:
+  - /dataset/waterbirds@_here_
+  - /method/TopK_0.5@_here_
+  - _self_
+
+aux_weight: 3.0
+aggregate_mix_rate: True

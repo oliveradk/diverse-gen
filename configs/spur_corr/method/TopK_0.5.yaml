@@ -1,0 +1,5 @@
+loss_type: TOPK
+mix_rate_lower_bound: 0.5
+mix_rate_schedule: linear
+mix_rate_t0: 0
+mix_rate_t1: ${epochs}

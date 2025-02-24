@@ -1,0 +1,7 @@
+defaults:
+  - /dataset/toy_grid@_here_
+  - /method/DivDis@_here_
+  - _self_
+
+aux_weight: 1.0
+optimizer: adamw

@@ -1,0 +1,5 @@
+loss_type: DBAT
+shared_backbone: false
+freeze_heads: true
+binary: true
+head_1_epochs: ${div:${epochs},2}

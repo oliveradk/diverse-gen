@@ -1,0 +1,6 @@
+defaults:
+  - /dataset/celebA-0@_here_
+  - /method/DivDis@_here_
+  - _self_
+
+aux_weight: 2.5

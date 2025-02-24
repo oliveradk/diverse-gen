@@ -1,0 +1,6 @@
+defaults:
+  - /dataset/multi-nli@_here_
+  - /method/DivDis@_here_
+  - _self_
+
+aux_weight: 64

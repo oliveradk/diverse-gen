@@ -1,0 +1,5 @@
+defaults:
+  - /dataset/waterbirds@_here_
+  - /method/ERM@_here_
+  - _self_
+
