@@ -1,4 +1,3 @@
-#%%
 import os 
 os.chdir("/nas/ucb/oliveradk/diverse-gen/")
 
@@ -13,12 +12,12 @@ from omegaconf import OmegaConf
 from diverse_gen.losses.loss_types import LossType
 from diverse_gen.utils.exp_utils import get_study_args_dict, get_executor, run_experiments
 from diverse_gen.utils.run_study import get_storage_path
-#%%
+
 N_TRIALS = 32
 N_PARTITIONS = 4 # no longer using multiple partitions
 SAMPLER = "quasi-random"
 STUDY_SCRIPT_PATH = "diverse_gen/utils/run_study.py"
-#%%
+
 SCRIPT_NAME = "exp_scripts/spur_corr_exp.py"
 EXP_DIR = Path("output/dbat_aux_weight_sweep")
 SUB_DIR = None
@@ -26,9 +25,16 @@ if SUB_DIR is None:
     SUB_DIR = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 EXP_DIR = Path(EXP_DIR, SUB_DIR)
 EXP_DIR.mkdir(exist_ok=True, parents=True)
-#%%
+
 MIX_RATES = [0.1, 0.25, 0.5, 0.75, 1.0]
-DATASETS = ["toy_grid", "fmnist_mnist", "cifar_mnist", "waterbirds"]
+DATASETS = [
+    "toy_grid", 
+    "fmnist_mnist", 
+    "cifar_mnist", 
+    "waterbirds", 
+    "celebA-0", 
+    "multi-nli"
+]
 METHODS = ["DBAT"]
 
 
