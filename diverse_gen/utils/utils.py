@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Union
 from itertools import product
-
+from copy import deepcopy
 import torch
 
 
@@ -10,6 +10,7 @@ Input = Union[dict[str, torch.Tensor], torch.Tensor]
 
 def conf_to_args(conf: dict):
     args = []
+    conf = deepcopy(conf)
     config_file = conf.pop("--config_file", None)
     if config_file is not None:
         args.append("--config_file")

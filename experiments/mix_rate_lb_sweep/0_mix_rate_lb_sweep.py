@@ -58,7 +58,7 @@ def update_map_and_search_space(hparam_map, search_space, idx):
     # update hparam map
     hparam_map[k]["range"] = new_range
     # update search space
-    search_space[k] = np.linspace(new_range[0], new_range[1], 20).tolist()
+    search_space[k] = np.linspace(new_range[0], new_range[1], 20 // N_PARTITIONS).tolist()
 
     return hparam_map, search_space
 
