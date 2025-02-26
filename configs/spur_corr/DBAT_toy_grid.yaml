@@ -3,6 +3,6 @@ defaults:
   - /method/DBAT@_here_
   - _self_
 
-aux_weight: 0.4
+aux_weight: 1.0
 batch_size: 16
 target_batch_size: 64
