@@ -95,6 +95,7 @@ class Config():
     exp_dir: str = f"output/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     save_probs: bool = False
     plot_activations: bool = False
+    print_every: int = 1
 
 def post_init(conf: Config):
     # set group mix rate lower bounds based on 01 10 (kinda hacky for doing hparam searches)
@@ -127,6 +128,7 @@ OmegaConf.resolve(conf_dict)
 conf = Config(**conf_dict)
 exp_dir = conf.exp_dir
 os.makedirs(exp_dir, exist_ok=True)
+print(f"Writing output to: {exp_dir}")
 
 # save full config to exp_dir
 with open(f"{exp_dir}/config.yaml", "w") as f:
@@ -300,7 +302,7 @@ def compute_corrects(logits: torch.Tensor, y: torch.Tensor, binary: bool):
         return (logits.argmax(dim=-1) == y).sum().item()
 
 
-def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluating"): 
+def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluating", disable_tqdm: bool = False): 
     group_label_ls = feature_label_ls(classes_per_feat)
     
     # loss 
@@ -323,7 +325,7 @@ def eval(model, loader, device, loss_fn, use_labels=False, stage: str = "Evaluat
     }
     
     with torch.no_grad():
-        for x, y, gl in tqdm(loader, desc=stage):
+        for x, y, gl in tqdm(loader, desc=stage, disable=disable_tqdm):
             x, y, gl = to_device(x, y, gl, conf.device)
             logits = model(x)
             logits_by_head = torch.split(logits, classes_per_head, dim=-1)
@@ -411,7 +413,10 @@ def eval_all(
     total_val_weighted_loss = 0.0
     if len(source_val) > 0:
         src_loss_sum_fn = lambda x, y, gl: sum(src_loss_fn(x, y, gl))
-        source_val_metrics, source_val_probs = eval(net, source_val_loader, conf.device, src_loss_sum_fn, use_labels=True, stage="Source Val")
+        source_val_metrics, source_val_probs = eval(
+            net, source_val_loader, conf.device, src_loss_sum_fn, use_labels=True, stage="Source Val", 
+            disable_tqdm=(epoch + 1) % conf.print_every != 0
+        )
         for k, v in source_val_metrics.items():
             if 'count' not in k:
                 logger.add_scalar("val", f"source_{k}", v, epoch)
@@ -420,7 +425,10 @@ def eval_all(
     # target
     weighted_target_val_loss = 0.0
     if len(target_val) > 0:  
-        target_val_metrics, target_val_probs = eval(net, target_val_loader, conf.device, valid_loss_fn, use_labels=False, stage="Target Val")
+        target_val_metrics, target_val_probs = eval(
+            net, target_val_loader, conf.device, valid_loss_fn, use_labels=False, stage="Target Val", 
+            disable_tqdm=(epoch + 1) % conf.print_every != 0
+        )
         for k, v in target_val_metrics.items():
             if 'count' not in k:
                 logger.add_scalar("val", f"target_{k}", v, epoch)
@@ -433,7 +441,10 @@ def eval_all(
     logger.add_scalar("val", "weighted_loss", total_val_weighted_loss, epoch)
 
     ### Test
-    target_test_metrics, target_test_probs = eval(net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test")
+    target_test_metrics, target_test_probs = eval(
+        net, target_test_loader, conf.device, None, use_labels=False, stage="Target Test", 
+        disable_tqdm=(epoch + 1) % conf.print_every != 0
+    )
     for k, v in target_test_metrics.items():
         if 'count' not in k:
             logger.add_scalar("test", k, v, epoch)
@@ -463,12 +474,13 @@ def train(
         # epoch mix rate schedule
         if conf.loss_type == LossType.TOPK and conf.mix_rate_schedule == "linear" and conf.mix_rate_interval_frac is None:
             mix_rate_scheduler.step()
-        for batch_idx, (source_batch, target_batch) in tqdm(enumerate(train_loader), desc="Source train", total=loader_len):
+        train_iter = tqdm(enumerate(train_loader), desc="Source train", total=loader_len, disable=(epoch + 1) % conf.print_every != 0)
+        for batch_idx, (source_batch, target_batch) in train_iter:
             # step mix rate schedule
             if conf.loss_type == LossType.TOPK and conf.mix_rate_schedule == "linear" and conf.mix_rate_interval_frac is not None:
                 mix_rate_scheduler.step()
             # freeze heads for dbat
-            if conf.freeze_heads and epoch == conf.head_1_epochs: 
+            if conf.freeze_heads and epoch >= conf.head_1_epochs: 
                 net.unfreeze_head(0)
                 net.freeze_head(1)
             # source
@@ -514,35 +526,36 @@ def train(
                 logger=logger
             )
             ### Print Results
-            print(f"Epoch {epoch + 1} Eval Results:")
-            # print source acc 
-            for i in range(conf.heads):
-                print(f"Source validation acc {i}: {logger.metrics[f'val_source_acc_{i}'][-1]:.4f}")
-            # print validation losses
-            if len(source_val) > 0:
-                print(f"Source validation loss: {logger.metrics['val_source_loss'][-1]:.4f}")
-            if len(target_val) > 0:
-                print(f"Target validation loss {logger.metrics['val_target_loss'][-1]:.4f}")
-                print(f"Target validation weighted loss {logger.metrics['val_target_weighted_loss'][-1]:.4f}")
-            print(f"Validation loss: {logger.metrics['val_loss'][-1]:.4f}")
-            print(f"Validation weighted loss: {logger.metrics['val_weighted_loss'][-1]:.4f}")
-            print("\n=== Test Accuracies ===")
-            # Overall accuracy for each head
-            print("\nOverall Accuracies:")
-            for i in range(conf.heads):
-                print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}'][-1]:.4f}" + \
-                      (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}'][-1]:.4f}" if not conf.use_group_labels else ""))
-            # Worst group accuracy for each head
-            print("\nWorst Group Accuracies:")
-            for i in range(conf.heads):
-                print(f"Head {i}:  Worst: {logger.metrics[f'test_worst_acc_{i}'][-1]:.4f}")
-            # Group-wise accuracies
-            print("\nGroup-wise Accuracies:")
-            for group_label in feature_label_ls(classes_per_feat):
-                print(f"\nGroup {group_label}, count: {logger.metrics[f'test_count_{group_label}']}:")
+            if (epoch + 1) % conf.print_every == 0:
+                print(f"Epoch {epoch + 1} Eval Results:")
+                # print source acc 
                 for i in range(conf.heads):
-                    print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}" + \
-                          (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}" if not conf.use_group_labels else ""))
+                    print(f"Source validation acc {i}: {logger.metrics[f'val_source_acc_{i}'][-1]:.4f}")
+                # print validation losses
+                if len(source_val) > 0:
+                    print(f"Source validation loss: {logger.metrics['val_source_loss'][-1]:.4f}")
+                if len(target_val) > 0:
+                    print(f"Target validation loss {logger.metrics['val_target_loss'][-1]:.4f}")
+                    print(f"Target validation weighted loss {logger.metrics['val_target_weighted_loss'][-1]:.4f}")
+                print(f"Validation loss: {logger.metrics['val_loss'][-1]:.4f}")
+                print(f"Validation weighted loss: {logger.metrics['val_weighted_loss'][-1]:.4f}")
+                print("\n=== Test Accuracies ===")
+                # Overall accuracy for each head
+                print("\nOverall Accuracies:")
+                for i in range(conf.heads):
+                    print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}'][-1]:.4f}" + \
+                        (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}'][-1]:.4f}" if not conf.use_group_labels else ""))
+                # Worst group accuracy for each head
+                print("\nWorst Group Accuracies:")
+                for i in range(conf.heads):
+                    print(f"Head {i}:  Worst: {logger.metrics[f'test_worst_acc_{i}'][-1]:.4f}")
+                # Group-wise accuracies
+                print("\nGroup-wise Accuracies:")
+                for group_label in feature_label_ls(classes_per_feat):
+                    print(f"\nGroup {group_label}, count: {logger.metrics[f'test_count_{group_label}']}:")
+                    for i in range(conf.heads):
+                        print(f"Head {i}:  Main: {logger.metrics[f'test_acc_{i}_{group_label}'][-1]:.4f}" + \
+                            (f"  |  Alt: {logger.metrics[f'test_acc_alt_{i}_{group_label}'][-1]:.4f}" if not conf.use_group_labels else ""))
             net.train()
 
 
