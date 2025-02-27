@@ -64,6 +64,8 @@ def compute_loss(
     elif mode == 'topk':
         topk_bs = virtual_bs if virtual_bs is not None else bs
         k = round(topk_bs * mix_rate)
+        if k == 0:
+            return t.tensor([0.0], device=losses.device)
         loss = t.topk(losses, k=k, largest=False).values.mean()
     return loss
 
