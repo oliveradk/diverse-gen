@@ -39,10 +39,18 @@ class MultiNetModel(nn.Module):
     def freeze_head(self, head_idx: int):
         self.backbones[head_idx].requires_grad_(False)
         self.heads[head_idx].requires_grad_(False)
+        # freeze batchnorm stats
+        for module in self.backbones[head_idx].modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.track_running_stats = False  # Prevent updates to running stats
     
     def unfreeze_head(self, head_idx: int):
         self.backbones[head_idx].requires_grad_(True)
         self.heads[head_idx].requires_grad_(True)
+        # unfreeze batchnorm stats
+        for module in self.backbones[head_idx].modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.track_running_stats = True  # Allow updates to running stats
 
 
 @contextmanager
