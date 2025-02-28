@@ -26,7 +26,13 @@ NODES = 4
 
 SEEDS = [1, 2, 3]
 MIX_RATES = [None]
-METHODS = ["TopK_0.1", "TopK_0.5", "ERM", "DBAT", "DivDis"]
+METHODS = [
+    "TopK_0.1", 
+    "TopK_0.5", 
+    "ERM", 
+    "DBAT", 
+    "DivDis"
+]
 DATASETS = ["waterbirds"]
 
 # generate exp configs
