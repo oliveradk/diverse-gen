@@ -7,46 +7,16 @@ from diverse_gen.utils.utils import conf_to_args
 
 EXP_SCRIPT = "exp_scripts/measurement_tampering.py"
 
-DATASET_CONFIGS = {
-    # "diamonds": {
-    #     "dataset": "diamonds-seed0",
-    #     "model": "codegen-350M-mono-measurement_pred-diamonds-seed0",
-    # },
-    "generated_stories": {
-        "dataset": "generated_stories",
-        "model": "pythia-1_4b-deduped-measurement_pred-generated_stories",
-        "feature_dim": 2048
-    },
-}
 
-LOSS_CONFIGS = {
-    "TopK": {
-        "loss_type": LossType.TOPK, 
-        "mix_rate_schedule": "linear", 
-        "mix_rate_t0": 0, 
-        "mix_rate_t1": 1
-    }, 
-    # "DivDis": {"loss_type": LossType.DIVDIS}, 
-    "FT Trusted": {
-        "loss_type": LossType.ERM, 
-        "aux_weight": 0.0, 
-        "heads": 1
-    }, 
-    "Probe for Evidence of Tamper": {
-        "loss_type": LossType.ERM,  
-        "aux_weight": 0.0, 
-        "heads": 1, "source_labels": ["sensors_agree"], 
-        "split_source_target": False, 
-        "target_only_disagree": True, 
-        "freeze_model": True, 
-    },
-      "Measurement Predictor (baseline)": {
-        "loss_type": LossType.ERM, 
-        "heads": 1, 
-        "train": False, 
-        "load_prior_probe": True
-    }
-}
+METHODS = [
+    "TopK_0.1", 
+    "DivDis", 
+    "FT_Trusted", 
+    "Probe_for_Evidence_of_Tamper", 
+    "Measurement_Predictor"
+]
+
+DATASETS = ["diamonds", "generated_stories"]
 
 # Common test configurations
 TEST_CONFIG = {
@@ -57,14 +27,16 @@ TEST_CONFIG = {
     "dataset_length": 32
 }
 
-@pytest.mark.parametrize("loss_name, loss_config", LOSS_CONFIGS.items())
-def test_diamonds_all_losses(loss_name, loss_config):
-    """Test all loss types on waterbirds dataset"""
-    conf = {**DATASET_CONFIGS["diamonds"], **loss_config}
+@pytest.mark.parametrize("method_name", METHODS)
+def test_diamonds_all_losses(method_name):
+    """Test all loss types on diamonds dataset"""
+    conf = {
+        "--config_file": f"{method_name}_diamonds", 
+        **TEST_CONFIG
+    }
     cmd = [
         "python", EXP_SCRIPT,
         *conf_to_args(conf), 
-        *conf_to_args(TEST_CONFIG)
     ]
     try: 
         subprocess.run(cmd, check=True)
@@ -72,14 +44,16 @@ def test_diamonds_all_losses(loss_name, loss_config):
         print(f"Error running command: {e}")
         raise e
 
-@pytest.mark.parametrize("dataset_name, dataset_config", DATASET_CONFIGS.items())
-def test_topk_all_datasets(dataset_name, dataset_config):
+@pytest.mark.parametrize("dataset_name", DATASETS)
+def test_topk_all_datasets(dataset_name):
     """Test TOPK loss on all datasets"""
+    conf = {
+        "--config_file": f"TopK_0.1_{dataset_name}",
+        **TEST_CONFIG
+    }
     cmd = [
         "python", EXP_SCRIPT,
-        *conf_to_args(dataset_config),
-        *conf_to_args({"loss_type": LossType.TOPK}),
-        *conf_to_args(TEST_CONFIG)
+        *conf_to_args(conf),
     ]
 
     try: 
