@@ -1,0 +1,6 @@
+defaults:
+  - /dataset/generated_stories@_here_
+  - /method/Probe_for_Evidence_of_Tamper@_here_
+  - _self_
+
+lr: 0.0005

@@ -1,0 +1,6 @@
+dataset: "generated_stories"
+model: pythia-1_4b-deduped-measurement_pred-generated_stories
+epochs: 4
+frac_warmup_steps: 0.15
+max_length: 1536
+feature_dim: 2048

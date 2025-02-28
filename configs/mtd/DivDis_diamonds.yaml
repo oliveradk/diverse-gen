@@ -1,0 +1,7 @@
+defaults:
+  - /dataset/diamonds@_here_
+  - /method/DivDis@_here_
+  - _self_
+
+lr: 2e-05
+aux_weight: 3.0

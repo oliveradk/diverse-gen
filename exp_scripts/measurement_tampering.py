@@ -2,6 +2,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
+import sys 
 from collections import defaultdict
 from typing import Optional, Literal
 import copy
@@ -14,6 +15,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from omegaconf import OmegaConf
+from hydra import compose, initialize
 from tqdm import tqdm
 from datasets import load_dataset
 from sklearn.metrics import roc_auc_score
@@ -84,26 +86,32 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     exp_dir: str = f"output/mtd/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
-# init config
+
+# load config
+OmegaConf.register_new_resolver("div", lambda x, y: x // y)
 conf = Config()
-# parse overrides
-overrride_keys = []
-import sys 
-overrides = OmegaConf.from_cli(sys.argv[1:])
-print("overrides", overrides)
-overrride_keys = overrides.keys()
-conf_dict = OmegaConf.merge(OmegaConf.structured(conf), overrides)
+file_overrides = {}
+print(sys.argv)
+if sys.argv[1] == "--config_file": 
+    config_path = sys.argv[2]
+    with initialize(config_path=f"../configs/mtd", version_base=None):
+        file_overrides = compose(config_name=config_path)
+    cmd_line_args = sys.argv[3:] if len(sys.argv) > 3 else []
+else: 
+    cmd_line_args = sys.argv[1:]
+cmd_line_overrides = OmegaConf.from_cli(cmd_line_args)
+conf_dict = OmegaConf.merge(OmegaConf.structured(conf), file_overrides, cmd_line_overrides)
+OmegaConf.resolve(conf_dict)
 conf = Config(**conf_dict)
-# init exp dir
 exp_dir = conf.exp_dir
 os.makedirs(exp_dir, exist_ok=True)
+print(f"Writing output to: {exp_dir}")
 # save full config to exp_dir
 with open(f"{exp_dir}/config.yaml", "w") as f:
     OmegaConf.save(config=conf, f=f)
 # save commit hash
 with open(f"{exp_dir}/commit_hash.txt", "w") as f:
     f.write(get_current_commit_hash())
-
 
 # Model
 model_path = f"oliverdk/{conf.model}"

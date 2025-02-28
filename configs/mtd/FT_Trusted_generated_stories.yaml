@@ -1,0 +1,6 @@
+defaults:
+  - /dataset/generated_stories@_here_
+  - /method/FT_Trusted@_here_
+  - _self_
+
+lr: 0.005

@@ -1,0 +1,7 @@
+defaults:
+  - /dataset/generated_stories@_here_
+  - /method/DivDis@_here_
+  - _self_
+
+lr: 3e-06
+aux_weight: 3.0

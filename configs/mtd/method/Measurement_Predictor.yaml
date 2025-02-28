@@ -1,0 +1,4 @@
+loss_type: ERM 
+heads: 1 
+train: False 
+load_prior_probe: True

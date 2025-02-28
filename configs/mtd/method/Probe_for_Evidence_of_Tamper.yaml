@@ -1,0 +1,8 @@
+loss_type: ERM 
+aux_weight: 0.0 
+heads: 1
+source_labels: 
+- sensors_agree
+split_source_target: False
+target_only_disagree: True
+freeze_model: True

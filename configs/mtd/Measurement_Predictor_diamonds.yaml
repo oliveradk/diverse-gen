@@ -1,0 +1,5 @@
+defaults:
+  - /dataset/diamonds@_here_
+  - /method/Measurement_Predictor@_here_
+  - _self_
+
