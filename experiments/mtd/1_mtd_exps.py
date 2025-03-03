@@ -23,7 +23,10 @@ METHODS = [
     "Probe_for_Evidence_of_Tamper", 
     "Measurement_Predictor"
 ]
-DATASETS = ["diamonds", "generated_stories"]
+DATASETS = [
+    "diamonds", 
+    "generated_stories"
+]
 SEEDS = [0, 1, 2, 3, 4, 5, 6, 7]
 
 
